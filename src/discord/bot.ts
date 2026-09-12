@@ -234,18 +234,18 @@ async function onButton(orch: Orchestrator, i: ButtonInteraction): Promise<void>
   const [action, arg, arg2] = i.customId.split(":");
 
   if (action === "approve" && arg) {
+    // Acknowledge within Discord's 3s window before doing any work.
+    await i.deferUpdate();
     const r = await orch.approve(projectId, arg, i.user.id, name);
     if (!r.ok) {
-      await i.reply({ content: r.reason ?? "Could not approve.", flags: MessageFlags.Ephemeral });
+      await i.followUp({ content: r.reason ?? "Could not approve.", flags: MessageFlags.Ephemeral });
       return;
     }
     const p = await orch.get(projectId);
     const v = p?.versions.find((x) => x.id === arg);
     const embed = i.message.embeds[0];
     if (p && v && embed) {
-      await i.update({ embeds: [EmbedBuilder.from(embed).setFooter({ text: approvalsFooter(p, v) })] });
-    } else {
-      await i.deferUpdate();
+      await i.editReply({ embeds: [EmbedBuilder.from(embed).setFooter({ text: approvalsFooter(p, v) })] }).catch((e) => log.warn("footer update", errMsg(e)));
     }
     await i.followUp({ content: `✅ You approved ${arg} (${r.count}/${r.total}).`, flags: MessageFlags.Ephemeral });
     return;
@@ -264,17 +264,16 @@ async function onButton(orch: Orchestrator, i: ButtonInteraction): Promise<void>
   }
 
   if (action === "vote" && arg && (arg2 === "a" || arg2 === "b")) {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
     const r = await orch.vote(projectId, arg, i.user.id, name, arg2);
-    await i.reply({
-      content: r.ok ? `🗳️ You voted ${arg2.toUpperCase()}.${r.resolved ? " Everyone has voted — building the winner." : ""}` : `Could not vote: ${r.reason}`,
-      flags: MessageFlags.Ephemeral,
-    });
+    await i.editReply(r.ok ? `🗳️ You voted ${arg2.toUpperCase()}.${r.resolved ? " Everyone has voted — building the winner." : ""}` : `Could not vote: ${r.reason}`);
     return;
   }
 
   if (action === "resolve" && arg) {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
     const r = await orch.resolveFork(projectId, arg, name);
-    await i.reply({ content: r.ok ? "⚖️ Resolving with the votes in so far." : `Could not resolve: ${r.reason}`, flags: MessageFlags.Ephemeral });
+    await i.editReply(r.ok ? "⚖️ Resolving with the votes in so far." : `Could not resolve: ${r.reason}`);
     return;
   }
 
