@@ -99,8 +99,12 @@ export function createPreviewServer(store: Store): express.Express {
     });
   });
 
-  app.get("/", (_req, res) => {
-    res.type("text/plain").send("arbiter preview server");
+  // Index: every session with a link to its live canvas. Also answers a bare /live.
+  app.get(["/", "/live"], async (_req, res) => {
+    const all = await store.loadAll();
+    all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(indexPage(all.map((p) => ({ ...p, working: store.isWorking(p.id) }))));
   });
 
   return app;
@@ -135,6 +139,39 @@ function comparePage(project: string, a: string, b: string): string {
 </div></body></html>`;
 }
 
+
+function indexPage(projects: Array<import("../types.js").Project & { working: boolean }>): string {
+  const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const rows = projects.length
+    ? projects
+        .map((p) => {
+          const cur = p.versions.find((v) => v.id === p.currentVersionId);
+          const fork = p.fork && !p.fork.resolved;
+          const pill = p.working ? '<span class="pill work">working…</span>' : fork ? '<span class="pill vote">vote open</span>' : p.status === "shipped" ? '<span class="pill ok">shipped</span>' : '<span class="pill">active</span>';
+          return `<a class="row" href="/live/${esc(p.id)}"><div class="brief">${esc(p.brief)}</div><div class="meta">${cur ? esc(cur.id) + " · " : ""}${p.versions.length} versions · ${p.decisions.length} decisions · ${Object.values(p.participants).map((x) => esc(x.name)).join(", ") || "—"}</div>${pill}</a>`;
+        })
+        .join("")
+    : '<div class="empty">No sessions yet. Start one in Discord with <code>/design</code> or run <code>npm run dry -- "your brief"</code>.</div>';
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Arbiter · sessions</title>
+<meta http-equiv="refresh" content="5">
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--line:#2a2f3a;--fg:#e6e8ee;--dim:#9aa3b2;--blue:#3b82f6;--pink:#ec4899;--green:#22c55e}
+  html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:32px 20px}
+  h1{font-size:22px;margin:0 0 4px} .sub{color:var(--dim);margin:0 0 24px}
+  .row{display:grid;grid-template-columns:1fr auto;gap:4px 16px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:inherit}
+  .row:hover{border-color:var(--blue)}
+  .brief{font-weight:700;font-size:16px} .meta{color:var(--dim);font-size:13px;grid-column:1}
+  .pill{grid-row:1/span 2;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .pill.ok{color:#fff;border-color:var(--green);background:rgba(34,197,94,.18)}
+  .pill.vote{color:#fff;border-color:var(--pink);background:rgba(236,72,153,.18)}
+  .pill.work{color:#fff;border-color:var(--blue);background:rgba(59,130,246,.18);animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .empty{color:var(--dim);padding:40px 0;text-align:center} code{background:var(--panel);padding:2px 6px;border-radius:6px}
+</style></head>
+<body><div class="wrap"><h1>Arbiter sessions</h1><p class="sub">Click a session to open its live canvas. This list refreshes every 5s.</p>${rows}</div></body></html>`;
+}
 
 function livePage(project: string): string {
   const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);

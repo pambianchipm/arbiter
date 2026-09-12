@@ -40,6 +40,7 @@ async function main(): Promise<void> {
 
   const threadId = `dry_${Date.now().toString(36)}`;
   console.log(`model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
+  console.log(`\x1b[1m📺 Live canvas: http://localhost:${port}/live/${threadId}\x1b[0m   (index of all sessions: http://localhost:${port}/live)`);
   console.log("Kickoff is running. The first render takes ~30–90s; you'll see 📐 v1 when it lands. Type feedback any time, e.g.  sam(designer): more whitespace\n");
   await orch.startProject({ threadId, channelId: "console", brief, createdBy: { id: "you", name: "You", role: "pm" } });
 

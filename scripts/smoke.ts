@@ -176,6 +176,8 @@ async function main(): Promise<void> {
 
   // ---- Live canvas
   console.log("\n▶ live canvas");
+  const idx = await fetch(`${baseUrl}/live`);
+  assert(idx.status === 200 && (await idx.text()).includes(`/live/${threadId}`), "index lists the session with a live link");
   const live = await fetch(`${baseUrl}/live/${threadId}`);
   assert(live.status === 200 && (await live.text()).includes("EventSource"), "live page served");
   const st = (await (await fetch(`${baseUrl}/live/${threadId}/state`)).json()) as { current: { id: string }; status: string; fork: unknown };
