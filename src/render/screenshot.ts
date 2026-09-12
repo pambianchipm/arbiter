@@ -3,6 +3,8 @@ import { log, errMsg } from "../log.js";
 
 export interface ShotResult {
   png: Buffer;
+  /** document.title of what was actually captured — lets callers detect a wrong page (proxy error, 404) */
+  title: string;
   /** console errors + page errors captured while rendering; fed back to the model */
   warnings: string[];
   ms: number;
@@ -24,7 +26,12 @@ export class Screenshotter {
     if (!this.launching) {
       const proxy = process.env.ARBITER_BROWSER_PROXY;
       this.launching = chromium
-        .launch({ headless: true, executablePath: this.executablePath, ...(proxy ? { proxy: { server: proxy } } : {}) })
+        .launch({
+          headless: true,
+          executablePath: this.executablePath,
+          // The preview server is local; only external references (Tailwind CDN, fonts, reference sites) go via the proxy.
+          ...(proxy ? { proxy: { server: proxy, bypass: "localhost,127.0.0.1" } } : {}),
+        })
         .then((b) => {
           this.browser = b;
           b.on("disconnected", () => {
@@ -74,10 +81,18 @@ export class Screenshotter {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout });
       await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => warnings.push("load event did not fire within 10s (continuing)"));
       await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => warnings.push("network did not go idle within 5s (continuing)"));
+      // Compare pages embed variants in iframes; wait for each frame too (bounded).
+      await Promise.all(
+        page
+          .frames()
+          .filter((f) => f !== page.mainFrame())
+          .map((f) => f.waitForLoadState("load", { timeout: 12_000 }).catch(() => warnings.push(`frame ${f.url()} did not finish loading within 12s (continuing)`))),
+      );
       await page.evaluate(() => (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready).catch(() => undefined);
       await page.waitForTimeout(250);
       const png = await page.screenshot({ type: "png", fullPage: opts.fullPage ?? false });
-      return { png: Buffer.from(png), warnings, ms: Date.now() - t0 };
+      const title = await page.title().catch(() => "");
+      return { png: Buffer.from(png), title, warnings, ms: Date.now() - t0 };
     } finally {
       await context.close().catch(() => undefined);
     }

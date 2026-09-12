@@ -219,6 +219,10 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
   } catch (e) {
     return fail(`Render failed for ${id}: ${errMsg(e)}. Check the HTML for a syntax problem and call publish_version again.`);
   }
+  const expectedTitle = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
+  if (expectedTitle && shot.title.trim() !== expectedTitle) {
+    return fail(`Render of ${id} captured the wrong page (title "${shot.title}" instead of "${expectedTitle}"). This is an infrastructure problem (preview server or proxy), not your HTML; tell the team and stop.`);
+  }
   const pageErrors = shot.warnings.filter((w) => w.startsWith("page error"));
   if (pageErrors.length && ctx.renderRetries < 1) {
     ctx.renderRetries++;

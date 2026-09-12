@@ -92,6 +92,13 @@ async function main(): Promise<void> {
   assert((await store.readHtml(threadId, "v1"))?.includes("Ember"), "v1 html stored");
   const png1 = await store.readPng(threadId, "v1");
   assert(png1 && png1.length > 10_000, `v1 screenshot rendered (${png1?.length} bytes)`);
+  const direct = await shots.shoot(`${baseUrl}/p/${threadId}/v1`);
+  assert(direct.title === "Ember — coffee, delivered", `screenshot captured the served page (title "${direct.title}")`);
+  const tailwindLoaded = await (async () => {
+    const r = await fetch(`${baseUrl}/p/${threadId}/v1`);
+    return r.ok;
+  })();
+  assert(tailwindLoaded, "preview reachable");
   assert(p.questions.length === 1 && p.questions[0].to === "designer", "question logged for designer");
   assert(surface.log.some((l) => l.startsWith("📐 v1")), "version posted to surface");
   const res = await fetch(`${baseUrl}/p/${threadId}/v1`);
