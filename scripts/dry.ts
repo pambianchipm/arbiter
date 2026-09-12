@@ -9,7 +9,7 @@ import readline from "node:readline";
 import type { AddressInfo } from "node:net";
 import { config } from "../src/config.js";
 import { Store } from "../src/store.js";
-import { createPreviewServer, listen } from "../src/render/server.js";
+import { createPreviewServer, listenOrFallback } from "../src/render/server.js";
 import { Screenshotter } from "../src/render/screenshot.js";
 import { Agent } from "../src/agent/run.js";
 import { Orchestrator } from "../src/orchestrator.js";
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   }
   const store = new Store(config.dataDir);
   await store.init();
-  const server = await listen(createPreviewServer(store), config.server.port || 0);
+  const server = await listenOrFallback(createPreviewServer(store), config.server.port || 0);
   const port = (server.address() as AddressInfo).port;
   process.env.PORT = String(port);
   const shots = new Screenshotter(config.server.chromiumPath);
@@ -40,7 +40,9 @@ async function main(): Promise<void> {
 
   const threadId = `dry_${Date.now().toString(36)}`;
   console.log(`model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
-  console.log(`\x1b[1m📺 Live canvas: http://localhost:${port}/live/${threadId}\x1b[0m   (index of all sessions: http://localhost:${port}/live)`);
+  const url = `http://localhost:${port}/live/${threadId}`;
+  const bar = "═".repeat(Math.max(40, url.length + 20));
+  console.log(`\n╔${bar}╗\n║  📺 Live canvas:  ${url}${" ".repeat(Math.max(0, bar.length - url.length - 19))}║\n║  All sessions:    http://localhost:${port}/live${" ".repeat(Math.max(0, bar.length - `http://localhost:${port}/live`.length - 19))}║\n╚${bar}╝\n`);
   console.log("Kickoff is running. The first render takes ~30–90s; you'll see 📐 v1 when it lands. Type feedback any time, e.g.  sam(designer): more whitespace\n");
   await orch.startProject({ threadId, channelId: "console", brief, createdBy: { id: "you", name: "You", role: "pm" } });
 

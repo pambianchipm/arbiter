@@ -113,11 +113,27 @@ export function createPreviewServer(store: Store): express.Express {
 export function listen(app: express.Express, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => {
-      log.info(`preview server on http://localhost:${port}`);
+      const addr = server.address();
+      const actual = typeof addr === "object" && addr ? addr.port : port;
+      log.info(`preview server on http://localhost:${actual}`);
       resolve(server);
     });
-    server.on("error", reject);
+    server.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code === "EADDRINUSE") {
+        reject(new Error(`port ${port} is already in use. Another Arbiter (or an old dry run) is probably still running: close it, or set PORT to something else in .env.`));
+      } else reject(e);
+    });
   });
+}
+
+/** Like listen(), but if the port is busy, fall back to a random free port and say so. Used by the dry run. */
+export async function listenOrFallback(app: express.Express, port: number): Promise<Server> {
+  try {
+    return await listen(app, port);
+  } catch (e) {
+    log.warn(`${(e as Error).message} Falling back to a random free port for this run.`);
+    return listen(app, 0);
+  }
 }
 
 function comparePage(project: string, a: string, b: string): string {
