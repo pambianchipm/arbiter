@@ -112,16 +112,26 @@ export function createPreviewServer(store: Store): express.Express {
 
 export function listen(app: express.Express, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, () => {
-      const addr = server.address();
-      const actual = typeof addr === "object" && addr ? addr.port : port;
-      log.info(`preview server on http://localhost:${actual}`);
-      resolve(server);
+    const server = app.listen(port);
+    const inUse = () =>
+      new Error(`port ${port} is already in use. Another Arbiter (or an old dry run) is probably still running: close it, or set PORT to something else in .env.`);
+    server.once("error", (e: NodeJS.ErrnoException) => {
+      server.close();
+      reject(e.code === "EADDRINUSE" ? inUse() : e);
     });
-    server.on("error", (e: NodeJS.ErrnoException) => {
-      if (e.code === "EADDRINUSE") {
-        reject(new Error(`port ${port} is already in use. Another Arbiter (or an old dry run) is probably still running: close it, or set PORT to something else in .env.`));
-      } else reject(e);
+    server.once("listening", () => {
+      // Node can emit "listening" and only then EADDRINUSE (dual-stack bind quirk). Confirm the
+      // socket is really bound before anyone trusts this server.
+      setTimeout(() => {
+        const addr = server.address();
+        if (!server.listening || !addr || typeof addr !== "object") {
+          server.close();
+          reject(inUse());
+          return;
+        }
+        log.info(`preview server on http://localhost:${addr.port}`);
+        resolve(server);
+      }, 60);
     });
   });
 }
