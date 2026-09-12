@@ -1,0 +1,33 @@
+{
+  "name": "arbiter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discord-native design agent: whiteboard photo → live prototype, conflicting feedback → fork A/B, vote, merge, handoff with decision provenance.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "register": "tsx src/discord/register.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "smoke": "tsx scripts/smoke.ts",
+    "dry": "tsx scripts/dry.ts",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  }
+}
