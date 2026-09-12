@@ -208,7 +208,7 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction): Pr
         return;
       }
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await orch.handoff(inProject);
+      await orch.handoff(inProject, i.options.getString("stack") ?? undefined);
       await i.editReply("Posted the handoff.");
       return;
     }

@@ -89,3 +89,86 @@ export function generateHandoff(p: Project): string {
   L.push(`_Assembled by Arbiter from the thread. Every decision above links back to who asked for it and why._`);
   return L.join("\n");
 }
+
+
+/**
+ * A prompt-shaped brief for a coding agent (Claude Code, Codex, Grok, …): paste it in
+ * alongside the final HTML and the agent has the goal, the constraints, every decision
+ * with provenance, and an acceptance checklist. Deterministic, no model call.
+ */
+export function generateBuildBrief(p: Project, stack?: string): string {
+  const cur = currentVersion(p);
+  const L: string[] = [];
+  const byRole = (role: string) => Object.values(p.participants).filter((x) => x.role === role).map((x) => x.name);
+  const target = stack?.trim() || "the project's existing stack and component system";
+
+  L.push(`# Build brief: ${p.brief}`);
+  L.push(``);
+  L.push(`You are a coding agent implementing a UI that a team already designed and approved in Discord with Arbiter. Implement it in **${target}**. The source of truth is \`${cur?.id ?? "the latest"}.html\` (single-file Tailwind prototype, attached) plus this brief. Do not redesign; port faithfully.`);
+  L.push(``);
+  L.push(`## Goal`);
+  L.push(p.brief);
+  if (cur) {
+    L.push(``);
+    L.push(`Final approved version: **${cur.id}** — ${cur.summary}${cur.approvals.length ? ` (approved by ${cur.approvals.length} of ${Object.keys(p.participants).length})` : ""}.`);
+  }
+
+  L.push(``);
+  L.push(`## Non-negotiables`);
+  if (!p.constraints.length) L.push(`- None recorded. Keep the prototype's structure and copy.`);
+  for (const c of p.constraints) L.push(`- ${c.text} _(stated by ${c.source})_`);
+  L.push(`- Keep all copy exactly as in the prototype; it was reviewed.`);
+  L.push(`- Where the prototype and a non-negotiable conflict, the non-negotiable wins; leave a \`TODO(arbiter)\` comment naming it.`);
+
+  L.push(``);
+  L.push(`## Decisions to preserve (do not relitigate)`);
+  if (!p.decisions.length) L.push(`- none logged`);
+  for (const d of p.decisions) L.push(`- ${d.summary} — asked by ${d.requestedBy.join(", ") || "the team"}; ${d.rationale}${d.versionId ? ` _(landed in ${d.versionId})_` : ""}`);
+
+  const forks = [...p.forkHistory, ...(p.fork ? [p.fork] : [])].filter((f) => f.resolved);
+  if (forks.length) {
+    L.push(``);
+    L.push(`## Settled disagreements`);
+    for (const f of forks) {
+      const win = f.resolved!.winner === "tie" ? "tie, settled by the role rule" : `${f.resolved!.winner.toUpperCase()} "${f.resolved!.winner === "a" ? f.a.label : f.b.label}"`;
+      L.push(`- ${f.question} → ${win}. Do not reopen.`);
+    }
+  }
+
+  if (p.style) {
+    L.push(``);
+    L.push(`## Style tokens`);
+    L.push(p.style.summary);
+    if (p.style.palette?.length) L.push(`- Palette: ${p.style.palette.join(", ")}`);
+    if (p.style.typography) L.push(`- Typography: ${p.style.typography}`);
+    if (p.style.spacing) L.push(`- Spacing: ${p.style.spacing}`);
+  }
+
+  L.push(``);
+  L.push(`## Acceptance checklist`);
+  L.push(`- [ ] Visual parity with \`${cur?.id ?? "latest"}.png\` at 1280×800 (attached) and a sensible mobile layout`);
+  L.push(`- [ ] Every non-negotiable above holds`);
+  for (const d of p.decisions) L.push(`- [ ] ${d.summary}`);
+  L.push(`- [ ] No external image URLs; placeholders stay CSS/SVG until real assets exist`);
+  L.push(`- [ ] Tailwind utility classes ported 1:1 to the target system's equivalents`);
+
+  L.push(``);
+  L.push(`## Who to ask`);
+  const pm = byRole("pm"), des = byRole("designer"), eng = byRole("eng");
+  L.push(`- Content and priority: ${pm.join(", ") || "the PM"}`);
+  L.push(`- Visual calls: ${des.join(", ") || "the designer"}`);
+  L.push(`- Feasibility and stack: ${eng.join(", ") || "engineering"}`);
+  const open = p.questions.filter((q) => !q.answered);
+  if (open.length) {
+    L.push(``);
+    L.push(`Open questions the team never answered (make a reasonable call and flag it):`);
+    for (const q of open) L.push(`- (${q.to}) ${q.text}`);
+  }
+
+  L.push(``);
+  L.push(`## Files`);
+  if (cur) L.push(`- \`${cur.id}.html\` — the prototype to port`);
+  if (cur) L.push(`- \`${cur.id}.png\` — what it should look like`);
+  L.push(`- \`handoff-${p.id}.md\` — full decision log with timestamps and votes`);
+  return L.join("\n");
+}

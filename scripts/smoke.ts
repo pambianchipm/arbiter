@@ -169,7 +169,35 @@ async function main(): Promise<void> {
   assert(p.status === "shipped", "all approvals → shipped");
   assert(await orch.handoff(threadId), "handoff posted");
   const last = surface.log[surface.log.length - 1];
-  assert(last.includes("handoff-thread_smoke.md") && last.includes("v3.html") && last.includes("v3.png"), "handoff attached spec + html + png");
+  assert(last.includes("handoff-thread_smoke.md") && last.includes("BUILD.md") && last.includes("v3.html") && last.includes("v3.png"), "handoff attached spec + BUILD.md + html + png");
+  const { generateBuildBrief } = await import("../src/handoff.js");
+  const brief = generateBuildBrief(p, "Next.js + Tailwind");
+  assert(brief.includes("Next.js + Tailwind") && brief.includes("No carousel component exists") && brief.includes("Airy hero over dense hero") && brief.includes("Do not reopen"), "BUILD.md carries stack, constraints, decisions, settled forks");
+
+  // ---- Live canvas
+  console.log("\n▶ live canvas");
+  const live = await fetch(`${baseUrl}/live/${threadId}`);
+  assert(live.status === 200 && (await live.text()).includes("EventSource"), "live page served");
+  const st = (await (await fetch(`${baseUrl}/live/${threadId}/state`)).json()) as { current: { id: string }; status: string; fork: unknown };
+  assert(st.current.id === "v3" && st.status === "shipped" && st.fork === null, "live state reflects v3 / shipped / no open fork");
+  const sseGot = await new Promise<boolean>((resolve) => {
+    const ctl = new AbortController();
+    fetch(`${baseUrl}/live/${threadId}/events`, { signal: ctl.signal }).then(async (r) => {
+      const reader = r.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      setTimeout(() => void store.save(p), 150); // trigger a change event
+      const t = setTimeout(() => { ctl.abort(); resolve(false); }, 5000);
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value);
+        if (buf.includes("data: change")) { clearTimeout(t); ctl.abort(); resolve(true); break; }
+      }
+    }).catch(() => resolve(buf_never()));
+    function buf_never() { return false; }
+  });
+  assert(sseGot, "SSE pushes a change event when state is saved");
 
   // ---- Restart survives: fresh store loads state from disk
   const store2 = new Store(dataDir);

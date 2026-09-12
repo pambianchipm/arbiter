@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { EventEmitter } from "node:events";
 import type { Project, Role } from "./types.js";
 
 /**
@@ -14,8 +15,25 @@ import type { Project, Role } from "./types.js";
 export class Store {
   private cache = new Map<string, Project>();
   private roleCache = new Map<string, Record<string, Role>>();
+  private working = new Set<string>();
+  /** per-project save chain: concurrent saves (a button click during a turn) are serialized, last write wins */
+  private saveChains = new Map<string, Promise<void>>();
+  /** emits "change" with a projectId whenever that project's state or activity changes (drives the live canvas) */
+  readonly events = new EventEmitter();
 
-  constructor(readonly dir: string) {}
+  constructor(readonly dir: string) {
+    this.events.setMaxListeners(200);
+  }
+
+  setWorking(projectId: string, on: boolean): void {
+    if (on) this.working.add(projectId);
+    else this.working.delete(projectId);
+    this.events.emit("change", projectId);
+  }
+
+  isWorking(projectId: string): boolean {
+    return this.working.has(projectId);
+  }
 
   projectDir(id: string): string {
     return path.join(this.dir, "projects", safe(id));
@@ -47,8 +65,20 @@ export class Store {
   async save(p: Project): Promise<void> {
     this.cache.set(p.id, p);
     const dir = this.projectDir(p.id);
-    await fs.mkdir(dir, { recursive: true });
-    await atomicWrite(path.join(dir, "state.json"), JSON.stringify(p, null, 2));
+    const prev = this.saveChains.get(p.id) ?? Promise.resolve();
+    const next = prev
+      .catch(() => undefined)
+      .then(async () => {
+        await fs.mkdir(dir, { recursive: true });
+        await atomicWrite(path.join(dir, "state.json"), JSON.stringify(p, null, 2));
+      });
+    this.saveChains.set(p.id, next);
+    try {
+      await next;
+    } finally {
+      if (this.saveChains.get(p.id) === next) this.saveChains.delete(p.id);
+    }
+    this.events.emit("change", p.id);
   }
 
   async listIds(): Promise<string[]> {
@@ -136,8 +166,9 @@ function safe(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+let tmpCounter = 0;
 async function atomicWrite(file: string, data: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
   await fs.writeFile(tmp, data, "utf8");
   await fs.rename(tmp, file);
 }

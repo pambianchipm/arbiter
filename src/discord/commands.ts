@@ -22,6 +22,9 @@ export const commands = [
     .setName("constraint")
     .setDescription("Record a hard constraint (e.g. 'no carousel component') that every version must respect")
     .addStringOption((o) => o.setName("text").setDescription("The constraint").setRequired(true).setMaxLength(400)),
-  new SlashCommandBuilder().setName("handoff").setDescription("Post the handoff spec: decisions with provenance, constraints, final source"),
+  new SlashCommandBuilder()
+    .setName("handoff")
+    .setDescription("Post the handoff: decisions with provenance, constraints, final source, and a BUILD.md for a coding agent")
+    .addStringOption((o) => o.setName("stack").setDescription("Target stack for BUILD.md, e.g. 'Next.js + Tailwind + shadcn'").setMaxLength(120)),
   new SlashCommandBuilder().setName("status").setDescription("Where this design session stands"),
 ].map((c) => c.toJSON());

@@ -42,6 +42,16 @@ Discord thread ──messages/buttons──▶ Orchestrator ──turn──▶ 
 - **Reference sites.** "make it feel like https://linear.app" → the agent screenshots the site, extracts palette/type/spacing, and persists style notes for every later version.
 - **Handoff** is deterministic (no model call): decisions with who/why/when, constraints, how each disagreement was settled and who voted how, style notes, open questions, version history, plus the final HTML and PNG.
 
+## Live canvas (the "agent shares its screen" mode)
+
+Every session posts a link like `http://localhost:3939/live/<thread>`. It's one page that always shows the latest state: the current version in an iframe, a pulsing "Arbiter is working…" badge during a turn, and during a vote it splits into A | B with the live tally. It updates over server-sent events the moment state changes.
+
+For a voice/video session: hop in a Discord voice channel, and whoever runs the bot screen-shares that tab. Feedback goes in the thread (or, next step, by voice); the shared screen changes live. No public URL needed for this, since the screen-sharer's own localhost is what everyone sees.
+
+## Hand off to a coding agent
+
+`/handoff [stack]` (or the 📦 button) posts four files: `handoff-<thread>.md` (the full decision log with timestamps and votes), `BUILD.md` (a prompt-shaped brief for a coding agent: goal, non-negotiables, decisions to preserve, settled disagreements, style tokens, an acceptance checklist, and who to ask), plus the final `vN.html` and `vN.png`. Drop `BUILD.md` and the HTML into Claude Code, Codex or Grok and say "build this". Pass a stack, e.g. `/handoff stack: Next.js + Tailwind + shadcn`, to target it.
+
 ## Setup (10 minutes)
 
 ### 1. Discord application
@@ -66,6 +76,13 @@ ngrok http 3939            # or: cloudflared tunnel --url http://localhost:3939
 PUBLIC_BASE_URL=https://xyz.ngrok.app npm run dev
 ```
 
+## Installing it on a server (yours or someone else's)
+
+Nobody points Arbiter at a GitHub repo or a laptop. It is a bot process plus a small web server; it has to be running somewhere, and people add it to a Discord server with the OAuth invite link from step 4 above. One running instance serves any number of servers: roles are stored per guild, projects per thread.
+
+- **Hackathon / demo:** run it on your laptop with `npm run dev`. Add `ngrok`/`cloudflared` only if you want clickable live links for people not looking at your screen.
+- **Always-on:** any Node 20+ host with a persistent disk for `data/` (Railway, Fly.io, a $5 VPS). Set `PUBLIC_BASE_URL` to the host's URL so links in Discord work. Leave `DISCORD_GUILD_ID` empty to register commands globally.
+
 ## Commands and controls
 
 | Where | What |
@@ -74,7 +91,7 @@ PUBLIC_BASE_URL=https://xyz.ngrok.app npm run dev
 | `@Arbiter <brief>` + image | Same, from a plain message. |
 | `/role designer\|pm\|eng\|stakeholder` | Tell Arbiter your role (routing + tiebreaks). |
 | `/constraint <text>` | Hard constraint every future version must respect. |
-| `/status` · `/handoff` | Where things stand · post the spec + source. |
+| `/status` · `/handoff [stack]` | Where things stand · post the spec, BUILD.md and source. |
 | Any message in the thread | Feedback. Attach an annotated screenshot if you like. |
 | ✅ Approve · ✏️ Feedback · 📦 Handoff | Buttons on every version. Everyone approving = shipped. |
 | 🅰 🅱 ⚖️ | Vote on a fork, or resolve with the votes in so far. |

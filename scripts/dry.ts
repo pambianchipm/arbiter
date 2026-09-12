@@ -39,6 +39,8 @@ async function main(): Promise<void> {
   const orch = new Orchestrator(store, shots, surface, agent, { baseUrl: `http://localhost:${port}`, debounceMs: 3000, nudgeMinutes: 1, forkTimeoutMinutes: 2 });
 
   const threadId = `dry_${Date.now().toString(36)}`;
+  console.log(`model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
+  console.log("Kickoff is running. The first render takes ~30–90s; you'll see 📐 v1 when it lands. Type feedback any time, e.g.  sam(designer): more whitespace\n");
   await orch.startProject({ threadId, channelId: "console", brief, createdBy: { id: "you", name: "You", role: "pm" } });
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

@@ -5,7 +5,7 @@ import type { Agent } from "./agent/run.js";
 import type { ToolContext } from "./agent/tools.js";
 import type { Fork, ImageInput, Participant, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
 import { currentVersion, nowIso, shortId } from "./types.js";
-import { generateHandoff } from "./handoff.js";
+import { generateBuildBrief, generateHandoff } from "./handoff.js";
 import { log, errMsg } from "./log.js";
 
 export interface OrchestratorConfig {
@@ -105,7 +105,10 @@ export class Orchestrator {
     };
     await this.store.save(p);
     if (args.images?.length) this.pendingImages.set(p.id, [...args.images]);
-    await this.surface.postText(p, `On it. Building v1 from the brief${args.images?.length ? " and your sketch" : ""}. First render usually lands in under a minute.`);
+    await this.surface.postText(
+      p,
+      `On it. Building v1 from the brief${args.images?.length ? " and your sketch" : ""}. First render usually lands in under a minute.\n📺 Live canvas (screen-share this): ${this.liveUrl(p)}`,
+    );
     void this.trigger(p.id, { kind: "kickoff" });
     return p;
   }
@@ -194,6 +197,7 @@ export class Orchestrator {
 
     const typing = setInterval(() => void this.surface.typing(p), 8_000);
     void this.surface.typing(p);
+    this.store.setWorking(p.id, true);
     const t0 = Date.now();
     try {
       await this.agent.runTurn({ project: p, reason, images, currentHtml }, ctx);
@@ -201,6 +205,7 @@ export class Orchestrator {
       result.error = errMsg(e);
     } finally {
       clearInterval(typing);
+      this.store.setWorking(p.id, false);
     }
 
     for (const t of p.transcript) if (t.kind === "human") t.seen = true;
@@ -312,11 +317,18 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- handoff & status
 
-  async handoff(projectId: string): Promise<boolean> {
+  liveUrl(p: Project): string {
+    return `${this.cfg.baseUrl}/live/${p.id}`;
+  }
+
+  async handoff(projectId: string, stack?: string): Promise<boolean> {
     const p = await this.store.load(projectId);
     if (!p) return false;
     const md = generateHandoff(p);
-    const files: { name: string; data: Buffer }[] = [{ name: `handoff-${p.id}.md`, data: Buffer.from(md, "utf8") }];
+    const files: { name: string; data: Buffer }[] = [
+      { name: `handoff-${p.id}.md`, data: Buffer.from(md, "utf8") },
+      { name: `BUILD.md`, data: Buffer.from(generateBuildBrief(p, stack), "utf8") },
+    ];
     const cur = currentVersion(p);
     if (cur) {
       const html = await this.store.readHtml(p.id, cur.id);
@@ -324,7 +336,12 @@ export class Orchestrator {
       const png = await this.store.readPng(p.id, cur.id);
       if (png) files.push({ name: `${cur.id}.png`, data: png });
     }
-    await this.surface.postFiles(p, files, `📦 Handoff for **${p.brief}** — ${p.decisions.length} decision${p.decisions.length === 1 ? "" : "s"}, ${p.constraints.length} constraint${p.constraints.length === 1 ? "" : "s"}, ${p.versions.length} version${p.versions.length === 1 ? "" : "s"}.`);
+    await this.surface.postFiles(
+      p,
+      files,
+      `📦 Handoff for **${p.brief}** — ${p.decisions.length} decision${p.decisions.length === 1 ? "" : "s"}, ${p.constraints.length} constraint${p.constraints.length === 1 ? "" : "s"}, ${p.versions.length} version${p.versions.length === 1 ? "" : "s"}.\n` +
+        `\`BUILD.md\` is written for a coding agent${stack ? ` targeting **${stack}**` : ""}: drop it and the HTML into Claude Code, Codex or Grok and say "build this".`,
+    );
     return true;
   }
 
@@ -341,6 +358,7 @@ export class Orchestrator {
     }
     const people = Object.values(p.participants).map((x) => `${x.name} (${x.role ?? "no role"})`);
     L.push(`People: ${people.join(", ")}`);
+    L.push(`Live canvas: ${this.liveUrl(p)}`);
     return L.join("\n");
   }
 

@@ -27,31 +27,55 @@ export class Agent {
     private readonly opts: AgentOptions,
   ) {}
 
+  /** set once a 400 is traced to optional betas (fast mode / fallbacks); they're dropped for the rest of the process */
+  private degraded = false;
+
+  private hasExtras(): boolean {
+    return this.opts.fastMode || this.opts.fallbacks;
+  }
+
+  private buildParams(messages: Anthropic.Beta.BetaMessageParam[], withExtras: boolean): StreamParams {
+    const betas: string[] = [];
+    if (withExtras && this.opts.fastMode) betas.push("fast-mode-2026-02-01");
+    if (withExtras && this.opts.fallbacks) betas.push("server-side-fallback-2026-07-01");
+    return {
+      model: this.opts.model,
+      max_tokens: 32_000,
+      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+      tools: TOOL_DEFS,
+      messages,
+      output_config: { effort: this.opts.effort },
+      ...(betas.length ? { betas } : {}),
+      ...(withExtras && this.opts.fastMode ? { speed: "fast" as const } : {}),
+      ...(withExtras && this.opts.fallbacks ? { fallbacks: "default" as const } : {}),
+    };
+  }
+
+  private async call(messages: Anthropic.Beta.BetaMessageParam[]): Promise<Anthropic.Beta.BetaMessage> {
+    try {
+      return await this.client.beta.messages.stream(this.buildParams(messages, !this.degraded)).finalMessage();
+    } catch (e) {
+      // A 400 while optional betas are on is almost always the org's API not accepting one of them.
+      // Retry once without them and stay degraded for the process lifetime.
+      if (e instanceof Anthropic.BadRequestError && !this.degraded && this.hasExtras()) {
+        log.warn(`Claude rejected the request (${e.message}). Retrying without optional betas (fast mode / refusal fallbacks) for the rest of this run.`);
+        this.degraded = true;
+        return await this.client.beta.messages.stream(this.buildParams(messages, false)).finalMessage();
+      }
+      throw e;
+    }
+  }
+
   async runTurn(input: TurnInput & { currentHtml?: string }, ctx: ToolContext): Promise<TurnResult> {
     const result = ctx.result;
     const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: buildTurnContent(input) }];
-    const betas: string[] = [];
-    if (this.opts.fastMode) betas.push("fast-mode-2026-02-01");
-    if (this.opts.fallbacks) betas.push("server-side-fallback-2026-07-01");
 
     let finalText = "";
     for (let i = 0; i < this.opts.maxIterations; i++) {
       result.iterations = i + 1;
       let msg: Anthropic.Beta.BetaMessage;
       try {
-        const params: StreamParams = {
-          model: this.opts.model,
-          max_tokens: 32_000,
-          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-          tools: TOOL_DEFS,
-          messages,
-          output_config: { effort: this.opts.effort },
-          ...(betas.length ? { betas } : {}),
-          ...(this.opts.fastMode ? { speed: "fast" as const } : {}),
-          ...(this.opts.fallbacks ? { fallbacks: "default" as const } : {}),
-        };
-        const stream = this.client.beta.messages.stream(params);
-        msg = await stream.finalMessage();
+        msg = await this.call(messages);
       } catch (e) {
         result.error = describeApiError(e);
         log.error("claude call failed", result.error);
@@ -99,7 +123,9 @@ export class Agent {
 }
 
 function describeApiError(e: unknown): string {
-  if (e instanceof Anthropic.AuthenticationError) return "Anthropic auth failed (check ANTHROPIC_API_KEY).";
+  if (e instanceof Anthropic.AuthenticationError) return "Anthropic auth failed (check ANTHROPIC_API_KEY in .env).";
+  if (e instanceof Anthropic.NotFoundError) return `Model not found (${e.message}). Check ARBITER_MODEL in .env.`;
+  if (e instanceof Anthropic.PermissionDeniedError) return `Permission denied by the Claude API: ${e.message}`;
   if (e instanceof Anthropic.RateLimitError) return "Rate limited by the Claude API; try again in a moment.";
   if (e instanceof Anthropic.BadRequestError) return `Bad request to Claude: ${e.message}`;
   if (e instanceof Anthropic.APIConnectionError) return "Could not reach the Claude API.";
