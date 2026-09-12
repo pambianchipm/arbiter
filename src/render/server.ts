@@ -83,6 +83,8 @@ export function createPreviewServer(store: Store): express.Express {
         : null,
       constraints: p.constraints.map((c) => c.text),
       lastAgent: lastAgent?.text ?? null,
+      lastError: p.lastTurn?.error ?? null,
+      lastTurn: p.lastTurn ?? null,
       versions: p.versions.length,
       decisions: p.decisions.length,
     });
@@ -170,6 +172,8 @@ function comparePage(project: string, a: string, b: string): string {
 }
 
 
+const SERVER_STARTED = new Date().toISOString().replace("T", " ").slice(0, 19) + "Z";
+
 function indexPage(projects: Array<import("../types.js").Project & { working: boolean }>, missing?: string): string {
   const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
   const notice = missing
@@ -180,8 +184,11 @@ function indexPage(projects: Array<import("../types.js").Project & { working: bo
         .map((p) => {
           const cur = p.versions.find((v) => v.id === p.currentVersionId);
           const fork = p.fork && !p.fork.resolved;
-          const pill = p.working ? '<span class="pill work">working…</span>' : fork ? '<span class="pill vote">vote open</span>' : p.status === "shipped" ? '<span class="pill ok">shipped</span>' : '<span class="pill">active</span>';
-          return `<a class="row" href="/live/${esc(p.id)}"><div class="brief">${esc(p.brief)}</div><div class="meta">${cur ? esc(cur.id) + " · " : ""}${p.versions.length} versions · ${p.decisions.length} decisions · ${Object.values(p.participants).map((x) => esc(x.name)).join(", ") || "—"}</div>${pill}</a>`;
+          const inFlight = p.working || (p.lastTurn && !p.lastTurn.endedAt && Date.now() - Date.parse(p.lastTurn.startedAt) < 15 * 60_000);
+          const err = p.lastTurn?.error;
+          const pill = inFlight ? '<span class="pill work">working…</span>' : err ? '<span class="pill bad">last turn failed</span>' : fork ? '<span class="pill vote">vote open</span>' : p.status === "shipped" ? '<span class="pill ok">shipped</span>' : '<span class="pill">active</span>';
+          const errLine = !inFlight && err ? `<div class="err">⚠️ ${esc(err)}</div>` : "";
+          return `<a class="row" href="/live/${esc(p.id)}"><div class="brief">${esc(p.brief)}</div>${pill}<div class="meta">${cur ? esc(cur.id) + " · " : ""}${p.versions.length} versions · ${p.decisions.length} decisions · ${Object.values(p.participants).map((x) => esc(x.name)).join(", ") || "—"} · started ${esc(p.createdAt.slice(11, 16))}Z</div>${errLine}</a>`;
         })
         .join("")
     : '<div class="empty">No sessions yet. Start one in Discord with <code>/design</code> or run <code>npm run dry -- "your brief"</code>.</div>';
@@ -195,8 +202,11 @@ function indexPage(projects: Array<import("../types.js").Project & { working: bo
   h1{font-size:22px;margin:0 0 4px} .sub{color:var(--dim);margin:0 0 24px}
   .row{display:grid;grid-template-columns:1fr auto;gap:4px 16px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:inherit}
   .row:hover{border-color:var(--blue)}
-  .brief{font-weight:700;font-size:16px} .meta{color:var(--dim);font-size:13px;grid-column:1}
-  .pill{grid-row:1/span 2;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .brief{grid-column:1;grid-row:1;font-weight:700;font-size:16px} .meta{grid-column:1;grid-row:2;color:var(--dim);font-size:13px}
+  .err{grid-column:1/span 2;grid-row:3;color:#fca5a5;font-size:13px;margin-top:6px;line-height:1.4}
+  .pill{grid-column:2;grid-row:1/span 2;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .pill.bad{color:#fff;border-color:#ef4444;background:rgba(239,68,68,.18)}
+  .srv{color:var(--dim);font-size:12px;margin-top:28px}
   .pill.ok{color:#fff;border-color:var(--green);background:rgba(34,197,94,.18)}
   .pill.vote{color:#fff;border-color:var(--pink);background:rgba(236,72,153,.18)}
   .pill.work{color:#fff;border-color:var(--blue);background:rgba(59,130,246,.18);animation:pulse 1.2s ease-in-out infinite}
@@ -204,7 +214,7 @@ function indexPage(projects: Array<import("../types.js").Project & { working: bo
   .empty{color:var(--dim);padding:40px 0;text-align:center} code{background:var(--panel);padding:2px 6px;border-radius:6px}
   .notice{background:rgba(236,72,153,.12);border:1px solid var(--pink);border-radius:12px;padding:12px 14px;margin-bottom:16px;line-height:1.5}
 </style></head>
-<body><div class="wrap"><h1>Arbiter sessions</h1><p class="sub">Click a session to open its live canvas. This list refreshes every 5s.</p>${notice}${rows}</div></body></html>`;
+<body><div class="wrap"><h1>Arbiter sessions</h1><p class="sub">Click a session to open its live canvas. This list refreshes every 5s.</p>${notice}${rows}<div class="srv">server pid ${process.pid} · up since ${SERVER_STARTED} · data dir ${esc(path.resolve(process.env.DATA_DIR || "./data"))}</div></div></body></html>`;
 }
 
 function livePage(project: string): string {
@@ -249,7 +259,8 @@ function livePage(project: string): string {
     document.getElementById("work").hidden = !s.working;
     document.getElementById("shipped").hidden = s.status !== "shipped";
     document.getElementById("people").textContent = s.participants.map(p=>p.name+(p.role?" · "+p.role:"")).join("  ·  ");
-    document.getElementById("msg").textContent = s.lastAgent || "";
+    document.getElementById("msg").textContent = s.lastError && !s.working ? "⚠️ " + s.lastError : (s.lastAgent || "");
+    document.getElementById("msg").style.color = s.lastError && !s.working ? "#fca5a5" : "";
     document.getElementById("meta").textContent = s.versions+" versions · "+s.decisions+" decisions · "+s.constraints.length+" constraints";
     const main = document.getElementById("main");
     if (s.fork) {

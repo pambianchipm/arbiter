@@ -22,6 +22,9 @@ async function main(): Promise<void> {
     console.error('usage: npm run dry -- "brief for the page"');
     process.exit(1);
   }
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    console.warn("\x1b[33m⚠ ANTHROPIC_API_KEY is not set. Copy .env.example to .env (same folder as package.json) and fill it in.\x1b[0m");
+  }
   const store = new Store(config.dataDir);
   await store.init();
   const server = await listenOrFallback(createPreviewServer(store), config.server.port || 0);

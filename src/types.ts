@@ -117,6 +117,8 @@ export interface Project {
   turnCount: number;
   /** version id a nudge was already sent for */
   nudgedFor?: string;
+  /** persisted so any process (and the live canvas) can show what the agent is doing or why it failed */
+  lastTurn?: { startedAt: string; endedAt?: string; reason: string; error?: string; toolCalls?: number; ms?: number };
 }
 
 export type TurnReason =

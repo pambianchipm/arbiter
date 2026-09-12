@@ -198,6 +198,8 @@ export class Orchestrator {
     const typing = setInterval(() => void this.surface.typing(p), 8_000);
     void this.surface.typing(p);
     this.store.setWorking(p.id, true);
+    p.lastTurn = { startedAt: nowIso(), reason: reason.kind };
+    await this.store.save(p);
     const t0 = Date.now();
     try {
       await this.agent.runTurn({ project: p, reason, images, currentHtml }, ctx);
@@ -210,6 +212,7 @@ export class Orchestrator {
 
     for (const t of p.transcript) if (t.kind === "human") t.seen = true;
     p.turnCount++;
+    p.lastTurn = { ...(p.lastTurn ?? { startedAt: nowIso(), reason: reason.kind }), endedAt: nowIso(), error: result.error, toolCalls: result.toolCalls, ms: Date.now() - t0 };
     await this.store.save(p);
 
     if (result.text) await this.surface.postText(p, result.text);
