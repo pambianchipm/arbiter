@@ -1,4 +1,5 @@
 import express from "express";
+import path from "node:path";
 import type { Server } from "node:http";
 import type { Store } from "../store.js";
 import { log } from "../log.js";
@@ -45,7 +46,10 @@ export function createPreviewServer(store: Store): express.Express {
     const { project } = req.params as Record<string, string>;
     const p = await store.load(project);
     if (!p) {
-      res.status(404).type("text/plain").send("project not found");
+      // Don't dead-end on a mistyped id: show the sessions this server knows about.
+      const all = await store.loadAll();
+      all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      res.status(404).type("html").send(indexPage(all.map((x) => ({ ...x, working: store.isWorking(x.id) })), project));
       return;
     }
     res.setHeader("Cache-Control", "no-store");
@@ -166,8 +170,11 @@ function comparePage(project: string, a: string, b: string): string {
 }
 
 
-function indexPage(projects: Array<import("../types.js").Project & { working: boolean }>): string {
+function indexPage(projects: Array<import("../types.js").Project & { working: boolean }>, missing?: string): string {
   const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const notice = missing
+    ? `<div class="notice">No session called <code>${esc(missing)}</code> on this server (data dir: <code>${esc(path.resolve(process.env.DATA_DIR || "./data"))}</code>). ${projects.length ? "Pick one below." : "If you expected one, a different Arbiter process (other folder or port) probably owns it."}</div>`
+    : "";
   const rows = projects.length
     ? projects
         .map((p) => {
@@ -195,8 +202,9 @@ function indexPage(projects: Array<import("../types.js").Project & { working: bo
   .pill.work{color:#fff;border-color:var(--blue);background:rgba(59,130,246,.18);animation:pulse 1.2s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
   .empty{color:var(--dim);padding:40px 0;text-align:center} code{background:var(--panel);padding:2px 6px;border-radius:6px}
+  .notice{background:rgba(236,72,153,.12);border:1px solid var(--pink);border-radius:12px;padding:12px 14px;margin-bottom:16px;line-height:1.5}
 </style></head>
-<body><div class="wrap"><h1>Arbiter sessions</h1><p class="sub">Click a session to open its live canvas. This list refreshes every 5s.</p>${rows}</div></body></html>`;
+<body><div class="wrap"><h1>Arbiter sessions</h1><p class="sub">Click a session to open its live canvas. This list refreshes every 5s.</p>${notice}${rows}</div></body></html>`;
 }
 
 function livePage(project: string): string {
