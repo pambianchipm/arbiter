@@ -45,7 +45,7 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
   {
     name: "fork_variants",
     description:
-      "Open an A/B vote because two people asked for incompatible things. Builds both variants, renders them side by side, and posts vote buttons. One variant per position; each must be faithful to its author. Only one fork can be open at a time.",
+      "Open an A/B vote because two people asked for incompatible things. Builds both variants, renders them side by side, and posts vote buttons. One variant per position; each must be faithful to its author. For each side give EITHER html OR reuse_version (an existing version id, e.g. the current version when one person wants it kept as-is). Prefer reuse_version whenever a side is an existing version: it is faster and cannot be truncated. Only one fork can be open at a time.",
     input_schema: {
       type: "object",
       properties: {
@@ -56,9 +56,10 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
             label: { type: "string", description: "3-6 word label" },
             champion: { type: "string", description: "Name of the person this variant is faithful to" },
             rationale: { type: "string", description: "One sentence on what this variant optimises for" },
-            html: { type: "string" },
+            html: { type: "string", description: "Complete HTML for this side. Omit when reuse_version is set." },
+            reuse_version: { type: "string", description: "Existing version id to use unchanged for this side, e.g. \"v2\"." },
           },
-          required: ["label", "champion", "rationale", "html"],
+          required: ["label", "champion", "rationale"],
         },
         b: {
           type: "object",
@@ -67,8 +68,9 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
             champion: { type: "string" },
             rationale: { type: "string" },
             html: { type: "string" },
+            reuse_version: { type: "string" },
           },
-          required: ["label", "champion", "rationale", "html"],
+          required: ["label", "champion", "rationale"],
         },
       },
       required: ["question", "a", "b"],
@@ -261,11 +263,21 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   if (p.fork && !p.fork.resolved) return fail(`Fork ${p.fork.id} is already open. Resolve it before opening another.`);
   const a = (input.a ?? {}) as Record<string, unknown>;
   const b = (input.b ?? {}) as Record<string, unknown>;
-  const htmlA = cleanHtml(a.html);
-  const htmlB = cleanHtml(b.html);
-  const badA = validateHtml(htmlA);
-  const badB = validateHtml(htmlB);
-  if (badA || badB) return fail(`Invalid html: ${badA ? "A: " + badA : ""} ${badB ? "B: " + badB : ""}`.trim());
+  const resolveSide = async (side: Record<string, unknown>, name: string): Promise<{ html?: string; error?: string }> => {
+    if (side.reuse_version) {
+      const id = String(side.reuse_version);
+      if (!p.versions.some((v) => v.id === id)) return { error: `${name}: reuse_version "${id}" does not exist (versions: ${p.versions.map((v) => v.id).join(", ")})` };
+      const html = await ctx.store.readHtml(p.id, id);
+      return html ? { html } : { error: `${name}: could not read ${id}` };
+    }
+    const html = cleanHtml(side.html);
+    const bad = validateHtml(html);
+    return bad ? { error: `${name}: ${bad} (pass reuse_version instead if this side is an existing version)` } : { html };
+  };
+  const [ra, rb] = await Promise.all([resolveSide(a, "A"), resolveSide(b, "B")]);
+  if (ra.error || rb.error) return fail(`Invalid fork: ${[ra.error, rb.error].filter(Boolean).join("; ")}`);
+  const htmlA = ra.html!;
+  const htmlB = rb.html!;
 
   const n = nextVersionNumber(p);
   const idA = `v${n}a`;

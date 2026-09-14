@@ -108,7 +108,7 @@ async function main(): Promise<void> {
 
   // ---- Turn 2: conflicting feedback → fork
   fake.push(
-    msg([toolUse("say", { text: "Conflict: Sam wants more whitespace, Priya wants it denser with social proof. Forking." }), toolUse("fork_variants", { question: "Airy hero or denser hero with social proof?", a: { label: "Airy, more whitespace", champion: "Sam", rationale: "Lets the headline breathe", html: HTML_V2A }, b: { label: "Denser + social proof", champion: "Priya", rationale: "Proof above the fold", html: HTML_V2B } })], "tool_use"),
+    msg([toolUse("say", { text: "Conflict: Sam wants more whitespace, Priya wants it denser with social proof. Forking." }), toolUse("fork_variants", { question: "Airy hero or denser hero with social proof?", a: { label: "Airy, more whitespace", champion: "Sam", rationale: "Lets the headline breathe", reuse_version: "v1" }, b: { label: "Denser + social proof", champion: "Priya", rationale: "Proof above the fold", html: HTML_V2B } })], "tool_use"),
     msg([text("Two variants are up. Vote A or B.")], "end_turn"),
   );
   console.log("\n▶ turn 2: conflicting feedback");
@@ -123,6 +123,7 @@ async function main(): Promise<void> {
   assert(t2text.includes("<html"), "turn prompt carries current version html");
   assert(p.fork && !p.fork.resolved && p.fork.id === "f2", "fork f2 is open");
   assert(p.versions.map((v) => v.id).join(",") === "v1,v2a,v2b", "variants v2a/v2b stored");
+  assert((await store.readHtml(threadId, "v2a")) === (await store.readHtml(threadId, "v1")), "reuse_version copied v1's html into v2a");
   const cmp = await fetch(`${baseUrl}/p/${threadId}/compare/v2a/v2b`);
   assert(cmp.status === 200, "compare page served");
   const pngF = await store.readPng(threadId, "f2");
