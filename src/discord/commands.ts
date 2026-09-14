@@ -27,4 +27,9 @@ export const commands = [
     .setDescription("Post the handoff: decision log, constraints, final source, and BUILD.md for a coding agent")
     .addStringOption((o) => o.setName("stack").setDescription("Target stack for BUILD.md, e.g. 'Next.js + Tailwind + shadcn'").setMaxLength(120)),
   new SlashCommandBuilder().setName("status").setDescription("Where this design session stands"),
+  new SlashCommandBuilder()
+    .setName("voice")
+    .setDescription("Let Arbiter listen in your voice channel and iterate on what the team says")
+    .addSubcommand((sc) => sc.setName("join").setDescription("Join the voice channel you're in and bind it to this design thread"))
+    .addSubcommand((sc) => sc.setName("leave").setDescription("Stop listening")),
 ].map((c) => c.toJSON());

@@ -119,6 +119,8 @@ export interface Project {
   nudgedFor?: string;
   /** persisted so any process (and the live canvas) can show what the agent is doing or why it failed */
   lastTurn?: { startedAt: string; endedAt?: string; reason: string; error?: string; toolCalls?: number; ms?: number };
+  /** set while Arbiter is listening in a voice channel for this thread */
+  voice?: { channelId: string; channelName: string; since: string };
 }
 
 export type TurnReason =

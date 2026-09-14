@@ -24,6 +24,9 @@ A design agent that lives in the team's Discord thread and does the thing a chat
 5. **Constraint (2:15)** Eng: "we don't have a carousel component." v3 posts with the winner and the constraint logged; Arbiter explains what it swapped.
 6. **Handoff (2:40)** `/handoff` → markdown spec with decisions, who asked, why, how the vote went, plus the HTML. Everyone taps ✅ → "shipped".
 
+## Voice beat (if the room has a voice channel)
+`/voice join` in the thread. Talk. Each sentence lands in the thread as `🎙️ Name: …` and the canvas changes; Arbiter asks its question out loud. Attribution is per speaker because Discord streams each voice separately: this is the "environment makes the agent better" line in its purest form.
+
 ## Anticipated questions
 - *"Isn't this Lovable in Discord?"* Lovable is one person. Arbiter's job is negotiation and provenance among several. Show the fork.
 - *"Why not Slack?"* Same design works there; Discord's buttons/threads/modals made it faster to build and judges can join the server and try it live.

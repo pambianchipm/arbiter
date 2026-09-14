@@ -48,6 +48,12 @@ Every session posts a link like `http://localhost:3939/live/<thread>`. It's one 
 
 For a voice/video session: hop in a Discord voice channel, and whoever runs the bot screen-shares that tab. Feedback goes in the thread (or, next step, by voice); the shared screen changes live. No public URL needed for this, since the screen-sharer's own localhost is what everyone sees.
 
+## Voice: talk to it in a voice channel
+
+Join a voice channel, then in the design thread run `/voice join`. Arbiter joins, and from then on every utterance in that channel is transcribed and posted into the thread as `🎙️ Name: …`, attributed to whoever said it (Discord gives the bot a separate audio stream per speaker, so attribution is free), and handled exactly like a typed message: same batching, same conflict detection, same votes. Its questions and closing lines are spoken back. Keep the live canvas on a shared screen and it's a design review with the agent in the room.
+
+Needs `ELEVENLABS_API_KEY` (speech-to-text via Scribe, speech via TTS) or `OPENAI_API_KEY` (Whisper, listen-only), and the bot invited with **Connect** and **Speak**. `/voice leave` stops it. Utterances are cut on ~0.9s of silence; anything under 0.6s is ignored.
+
 ## Hand off to a coding agent
 
 `/handoff [stack]` (or the 📦 button) posts four files: `handoff-<thread>.md` (the full decision log with timestamps and votes), `BUILD.md` (a prompt-shaped brief for a coding agent: goal, non-negotiables, decisions to preserve, settled disagreements, style tokens, an acceptance checklist, and who to ask), plus the final `vN.html` and `vN.png`. Drop `BUILD.md` and the HTML into Claude Code, Codex or Grok and say "build this". Pass a stack, e.g. `/handoff stack: Next.js + Tailwind + shadcn`, to target it.
@@ -58,7 +64,7 @@ For a voice/video session: hop in a Discord voice channel, and whoever runs the 
 1. https://discord.com/developers/applications → **New Application** → name it *Arbiter*.
 2. **Bot** → Reset Token → copy it (`DISCORD_TOKEN`). Under *Privileged Gateway Intents* enable **Message Content Intent**.
 3. **General Information** → copy the Application ID (`DISCORD_CLIENT_ID`).
-4. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot permissions *Send Messages, Create Public Threads, Send Messages in Threads, Embed Links, Attach Files, Read Message History, Add Reactions, Use Slash Commands*. Open the URL and add the bot to your server.
+4. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot permissions *View Channels, Send Messages, Create Public Threads, Send Messages in Threads, Embed Links, Attach Files, Read Message History, Add Reactions, Use Slash Commands*, plus *Connect* and *Speak* for voice. Open the URL and add the bot to your server.
 5. Right-click your server → Copy Server ID (`DISCORD_GUILD_ID`). With this set, slash commands appear instantly.
 
 ### 2. Run
@@ -92,6 +98,7 @@ Nobody points Arbiter at a GitHub repo or a laptop. It is a bot process plus a s
 | `/role designer\|pm\|eng\|stakeholder` | Tell Arbiter your role (routing + tiebreaks). |
 | `/constraint <text>` | Hard constraint every future version must respect. |
 | `/status` · `/handoff [stack]` | Where things stand · post the spec, BUILD.md and source. |
+| `/voice join` · `/voice leave` | Listen in your voice channel; every utterance becomes attributed feedback. |
 | Any message in the thread | Feedback. Attach an annotated screenshot if you like. |
 | ✅ Approve · ✏️ Feedback · 📦 Handoff | Buttons on every version. Everyone approving = shipped. |
 | 🅰 🅱 ⚖️ | Vote on a fork, or resolve with the votes in so far. |
@@ -125,6 +132,10 @@ src/
   discord/bot.ts       events → orchestrator; commands, buttons, modals; image intake; role inference
   discord/surface.ts   how the agent posts into Discord (embeds, attachments, tallies)
   discord/ui.ts        embeds / buttons / modal builders
+  voice/manager.ts     per-thread voice session: per-speaker capture, transcription, spoken replies
+  voice/stt.ts         ElevenLabs Scribe / OpenAI Whisper
+  voice/tts.ts         ElevenLabs streaming TTS
+  voice/audio.ts       48k stereo PCM → 16k mono WAV, hallucination filter
   render/server.ts     Express preview + A|B compare page
   render/screenshot.ts shared headless Chromium, error capture, bounded waits
   store.ts             atomic JSON + files per project

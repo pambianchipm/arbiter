@@ -73,6 +73,25 @@ async function main(): Promise<void> {
     for (const o of c.options ?? []) assert(o.description.length <= 100, `/${c.name} ${o.name} option description ≤100 chars`);
   }
 
+  console.log("▶ voice utils");
+  const audio = await import("../src/voice/audio.js");
+  const frames = 48_000; // 1s of 48k stereo
+  const pcm = Buffer.alloc(frames * 4);
+  for (let i = 0; i < frames; i++) {
+    const v = Math.round(Math.sin((2 * Math.PI * 440 * i) / 48_000) * 12_000);
+    pcm.writeInt16LE(v, i * 4);
+    pcm.writeInt16LE(v, i * 4 + 2);
+  }
+  const wav = audio.pcm48kStereoToWav16kMono(pcm);
+  assert(wav.toString("ascii", 0, 4) === "RIFF" && wav.toString("ascii", 8, 12) === "WAVE", "wav header");
+  assert(wav.readUInt32LE(24) === 16_000 && wav.readUInt16LE(22) === 1 && wav.length === 44 + 16_000 * 2, "1s of 48k stereo → 1s of 16k mono");
+  assert(Math.abs(audio.durationSeconds48kStereo(pcm) - 1) < 1e-9, "duration computed from pcm length");
+  assert(audio.looksLikeHallucination("Thank you.") && audio.looksLikeHallucination("you") && !audio.looksLikeHallucination("more whitespace in the hero"), "hallucination filter");
+  const vm = await import("../src/voice/manager.js");
+  assert(typeof vm.VoiceManager === "function", "voice manager module loads (opus + DAVE deps resolve)");
+  const stt = await import("../src/voice/stt.js");
+  assert(stt.pickSTT({ preference: "auto", elevenLabsKey: "x" })?.name === "elevenlabs-scribe" && stt.pickSTT({ preference: "auto", openaiKey: "y" })?.name === "openai-whisper" && stt.pickSTT({ preference: "off", elevenLabsKey: "x" }) === undefined, "stt provider selection");
+
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "arbiter-smoke-"));
   const store = new Store(dataDir);
   await store.init();

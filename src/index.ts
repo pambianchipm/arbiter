@@ -8,6 +8,9 @@ import { Orchestrator } from "./orchestrator.js";
 import { createDiscordClient, attachHandlers } from "./discord/bot.js";
 import { DiscordSurface } from "./discord/surface.js";
 import { explainDiscordError } from "./discord/errors.js";
+import { VoiceManager } from "./voice/manager.js";
+import { pickSTT } from "./voice/stt.js";
+import { ElevenLabsTTS } from "./voice/tts.js";
 import { log, errMsg } from "./log.js";
 
 async function main(): Promise<void> {
@@ -38,16 +41,23 @@ async function main(): Promise<void> {
   });
   await orch.resume();
 
-  attachHandlers(client, orch);
+  const stt = pickSTT({ preference: config.voice.stt, elevenLabsKey: config.voice.elevenLabsKey || undefined, openaiKey: config.voice.openaiKey || undefined });
+  const tts = config.voice.tts && config.voice.elevenLabsKey ? new ElevenLabsTTS(config.voice.elevenLabsKey, config.voice.elevenLabsVoiceId) : undefined;
+  const voice = new VoiceManager(client, orch, surface, stt, tts);
+  orch.attachVoice(voice);
+
+  attachHandlers(client, orch, voice);
   try {
     await client.login(config.discord.token);
   } catch (e) {
     throw new Error(explainDiscordError(e));
   }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
+  log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"}`);
 
   const shutdown = async (sig: string) => {
     log.info(`${sig} — shutting down`);
+    await voice.destroyAll().catch(() => undefined);
     client.destroy();
     await shots.close();
     server.close();

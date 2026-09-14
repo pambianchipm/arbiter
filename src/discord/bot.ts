@@ -16,7 +16,9 @@ import {
   type ModalSubmitInteraction,
 } from "discord.js";
 import type { Orchestrator } from "../orchestrator.js";
+import type { VoiceManager } from "../voice/manager.js";
 import type { ImageInput, Role } from "../types.js";
+import { displayName, inferRole } from "./people.js";
 import { approvalsFooter, feedbackModal } from "./ui.js";
 import { registerCommands } from "./register.js";
 import { log, errMsg } from "../log.js";
@@ -27,21 +29,6 @@ export function createDiscordClient(): Client {
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
     partials: [Partials.Channel, Partials.Message],
   });
-}
-
-/** Map a member's Discord roles onto Arbiter roles, so a server that already has roles needs zero setup. */
-export function inferRole(member: unknown): Role | undefined {
-  if (!(member instanceof GuildMember)) return undefined;
-  const names = member.roles.cache.map((r) => r.name.toLowerCase());
-  if (names.some((n) => /design/.test(n))) return "designer";
-  if (names.some((n) => /(^|\b)(pm|product)(\b|$)/.test(n))) return "pm";
-  if (names.some((n) => /(eng|dev|frontend|backend)/.test(n))) return "eng";
-  return undefined;
-}
-
-function displayName(i: { member: unknown; user: { globalName: string | null; username: string } }): string {
-  if (i.member instanceof GuildMember) return i.member.displayName;
-  return i.user.globalName ?? i.user.username;
 }
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -83,7 +70,7 @@ function threadName(brief: string): string {
   return t.length > 100 ? t.slice(0, 97) + "…" : t;
 }
 
-export function attachHandlers(client: Client, orch: Orchestrator): void {
+export function attachHandlers(client: Client, orch: Orchestrator, voice?: VoiceManager): void {
   client.once(Events.ClientReady, async (c) => {
     const guilds = c.guilds.cache.map((g) => ({ id: g.id, name: g.name }));
     log.info(`discord ready as ${c.user.tag} · in ${guilds.length} server(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(", ") || "none — invite it first"}`);
@@ -99,7 +86,7 @@ export function attachHandlers(client: Client, orch: Orchestrator): void {
   });
 
   client.on(Events.InteractionCreate, (i) => {
-    void onInteraction(orch, i).catch((e) => log.error("interaction handler:", explainDiscordError(e)));
+    void onInteraction(orch, i, voice).catch((e) => log.error("interaction handler:", explainDiscordError(e)));
   });
 
   client.on(Events.Error, (e) => log.error("discord client", errMsg(e)));
@@ -159,13 +146,13 @@ async function onMessage(client: Client, orch: Orchestrator, m: Message): Promis
   }
 }
 
-async function onInteraction(orch: Orchestrator, i: Interaction): Promise<void> {
-  if (i.isChatInputCommand()) return onCommand(orch, i);
+async function onInteraction(orch: Orchestrator, i: Interaction, voice?: VoiceManager): Promise<void> {
+  if (i.isChatInputCommand()) return onCommand(orch, i, voice);
   if (i.isButton()) return onButton(orch, i);
   if (i.isModalSubmit()) return onModal(orch, i);
 }
 
-async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction): Promise<void> {
+async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voice?: VoiceManager): Promise<void> {
   const name = displayName(i);
   const inProject = i.channel?.isThread() && orch.has(i.channel.id) ? i.channel.id : undefined;
 
@@ -233,6 +220,34 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction): Pr
       }
       const text = (await orch.statusText(inProject)) ?? "No project here.";
       await i.reply({ content: text, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    case "voice": {
+      if (!inProject) {
+        await i.reply({ content: "Run `/voice join` inside a design thread, while you're in a voice channel.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!voice) {
+        await i.reply({ content: "Voice isn't enabled on this Arbiter.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (i.options.getSubcommand() === "leave") {
+        const left = await voice.leave(inProject);
+        await i.reply({ content: left ? "🎙️ Stopped listening." : "I'm not in a voice channel for this thread." });
+        return;
+      }
+      const member = i.member instanceof GuildMember ? i.member : await i.guild?.members.fetch(i.user.id).catch(() => undefined);
+      const ch = member?.voice.channel;
+      if (!ch) {
+        await i.reply({ content: "Join a voice channel first, then run `/voice join` here.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await i.deferReply();
+      try {
+        await i.editReply(await voice.join(inProject, ch));
+      } catch (e) {
+        await i.editReply(`Couldn't join: ${errMsg(e)}`);
+      }
       return;
     }
   }

@@ -84,6 +84,7 @@ export function createPreviewServer(store: Store): express.Express {
       constraints: p.constraints.map((c) => c.text),
       lastAgent: lastAgent?.text ?? null,
       lastError: p.lastTurn?.error ?? null,
+      voice: p.voice ?? null,
       lastTurn: p.lastTurn ?? null,
       versions: p.versions.length,
       decisions: p.decisions.length,
@@ -250,7 +251,7 @@ function livePage(project: string): string {
   .empty{display:grid;place-items:center;color:var(--dim);font-size:18px}
 </style></head>
 <body>
-<header><div class="brief" id="brief">Arbiter</div><span class="pill v" id="ver">—</span><span class="pill" id="people"></span><span class="pill work" id="work" hidden>Arbiter is working…</span><span class="pill ok" id="shipped" hidden>Shipped</span></header>
+<header><div class="brief" id="brief">Arbiter</div><span class="pill v" id="ver">—</span><span class="pill" id="people"></span><span class="pill" id="voice" hidden>🎙️ listening</span><span class="pill work" id="work" hidden>Arbiter is working…</span><span class="pill ok" id="shipped" hidden>Shipped</span></header>
 <main class="single" id="main"><div class="empty">Waiting for the first version…</div></main>
 <footer><div class="msg" id="msg"></div><div id="meta"></div></footer>
 <script>
@@ -261,6 +262,7 @@ function livePage(project: string): string {
     document.getElementById("brief").textContent = s.brief;
     document.getElementById("work").hidden = !s.working;
     document.getElementById("shipped").hidden = s.status !== "shipped";
+    const vp = document.getElementById("voice"); vp.hidden = !s.voice; if (s.voice) vp.textContent = "🎙️ listening in #" + s.voice.channelName;
     document.getElementById("people").textContent = s.participants.map(p=>p.name+(p.role?" · "+p.role:"")).join("  ·  ");
     document.getElementById("msg").textContent = s.lastError && !s.working ? "⚠️ " + s.lastError : (s.lastAgent || "");
     document.getElementById("msg").style.color = s.lastError && !s.working ? "#fca5a5" : "";

@@ -15,6 +15,11 @@ export interface OrchestratorConfig {
   forkTimeoutMinutes: number;
 }
 
+export interface VoiceLike {
+  has(projectId: string): boolean;
+  speak(projectId: string, text: string): void;
+}
+
 export interface HumanMessage {
   userId: string;
   name: string;
@@ -36,6 +41,7 @@ export class Orchestrator {
   private forkTimers = new Map<string, NodeJS.Timeout>();
   private running = new Set<string>();
   private queued = new Map<string, TurnReason>();
+  private voice: VoiceLike | undefined;
 
   constructor(
     private readonly store: Store,
@@ -47,8 +53,26 @@ export class Orchestrator {
 
   async resume(): Promise<number> {
     const all = await this.store.loadAll();
+    // Voice connections don't survive a restart; clear stale markers.
+    for (const p of all) {
+      if (p.voice) {
+        p.voice = undefined;
+        await this.store.save(p);
+      }
+    }
     log.info(`resumed ${all.length} project(s) from ${this.store.dir}`);
     return all.length;
+  }
+
+  attachVoice(v: VoiceLike): void {
+    this.voice = v;
+  }
+
+  async setVoiceBinding(projectId: string, info: Project["voice"] | undefined): Promise<void> {
+    const p = await this.store.load(projectId);
+    if (!p) return;
+    p.voice = info;
+    await this.store.save(p);
   }
 
   has(projectId: string): boolean {
@@ -200,6 +224,8 @@ export class Orchestrator {
     this.store.setWorking(p.id, true);
     p.lastTurn = { startedAt: nowIso(), reason: reason.kind };
     await this.store.save(p);
+    const questionsBefore = p.questions.length;
+    const transcriptBefore = p.transcript.length;
     const t0 = Date.now();
     try {
       await this.agent.runTurn({ project: p, reason, images, currentHtml }, ctx);
@@ -217,6 +243,16 @@ export class Orchestrator {
 
     if (result.text) await this.surface.postText(p, result.text);
     if (result.error) await this.surface.postText(p, `⚠️ ${result.error}${result.publishedVersionIds.length ? "" : " Nothing was published this turn; reply to try again."}`);
+    if (this.voice?.has(p.id)) {
+      // Say out loud what a listener needs: narration lines, the questions, the closing message.
+      const said = p.transcript
+        .slice(transcriptBefore)
+        .filter((t) => t.kind === "agent" && !/^(Published |Opened fork |Asked |Posted the handoff)/.test(t.text))
+        .map((t) => t.text);
+      const asked = p.questions.slice(questionsBefore).map((q) => `Question for ${q.to}: ${q.text}`);
+      const spoken = [...said, ...asked, result.text].filter(Boolean).join(" ");
+      if (spoken) this.voice.speak(p.id, spoken);
+    }
     log.info(`turn done ${p.id} reason=${reason.kind} tools=${result.toolCalls} iters=${result.iterations} ${Date.now() - t0}ms${result.error ? " error=" + result.error : ""}`);
     return result;
   }

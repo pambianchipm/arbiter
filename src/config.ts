@@ -32,6 +32,13 @@ export const config = {
     publicBaseUrl: str("PUBLIC_BASE_URL").replace(/\/$/, ""),
     chromiumPath: str("CHROMIUM_PATH") || undefined,
   },
+  voice: {
+    stt: str("VOICE_STT", "auto"), // auto | elevenlabs | openai | off
+    tts: str("VOICE_TTS", "1") === "1",
+    elevenLabsKey: str("ELEVENLABS_API_KEY"),
+    elevenLabsVoiceId: str("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvTq8ikWAM"),
+    openaiKey: str("OPENAI_API_KEY"),
+  },
   dataDir: str("DATA_DIR", "./data"),
   debounceMs: num("DEBOUNCE_MS", 6000),
   nudgeMinutes: num("NUDGE_MINUTES", 3),
