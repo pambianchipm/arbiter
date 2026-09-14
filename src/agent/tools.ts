@@ -5,6 +5,7 @@ import type { Surface } from "../surface.js";
 import type { Fork, Project, Question, Role, TurnResult, Version } from "../types.js";
 import { nextVersionNumber, nowIso, shortId, ROLES } from "../types.js";
 import { log, errMsg } from "../log.js";
+import { buildHandoffFiles } from "../handoff.js";
 
 export interface ToolContext {
   project: Project;
@@ -140,6 +141,15 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
     },
   },
   {
+    name: "post_handoff",
+    description:
+      "Post the handoff package to the thread: the decision log with provenance, BUILD.md (a brief for a coding agent), and the current version's HTML and screenshot. Call this when someone asks for the handoff, the spec, the deliverable, the files, or the source. Optional stack targets BUILD.md (e.g. 'Next.js + Tailwind').",
+    input_schema: {
+      type: "object",
+      properties: { stack: { type: "string" } },
+    },
+  },
+  {
     name: "say",
     description: "Post a short status line to the thread (e.g. 'Conflict: Sam wants more whitespace, Priya wants denser. Forking.'). Keep it to one or two sentences.",
     input_schema: {
@@ -170,6 +180,8 @@ export async function executeTool(name: string, rawInput: unknown, ctx: ToolCont
         return await setStyle(input, ctx);
       case "say":
         return await say(input, ctx);
+      case "post_handoff":
+        return await postHandoff(input, ctx);
       default:
         return fail(`Unknown tool ${name}`);
     }
@@ -407,6 +419,17 @@ async function say(input: Record<string, unknown>, ctx: ToolContext): Promise<To
   pushAgentNote(ctx.project, text);
   await ctx.store.save(ctx.project);
   return ok({ posted: true });
+}
+
+async function postHandoff(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {
+  const p = ctx.project;
+  if (!p.versions.length) return fail("Nothing to hand off yet: no version has been published.");
+  const stack = input.stack ? String(input.stack).slice(0, 120) : undefined;
+  const { files, text } = await buildHandoffFiles(ctx.store, p, stack);
+  await ctx.surface.postFiles(p, files, text);
+  pushAgentNote(p, `Posted the handoff package (${files.map((f) => f.name).join(", ")}).`);
+  await ctx.store.save(p);
+  return ok({ posted: files.map((f) => f.name) });
 }
 
 function toStrArr(v: unknown): string[] {

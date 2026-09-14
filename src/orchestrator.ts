@@ -5,7 +5,7 @@ import type { Agent } from "./agent/run.js";
 import type { ToolContext } from "./agent/tools.js";
 import type { Fork, ImageInput, Participant, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
 import { currentVersion, nowIso, shortId } from "./types.js";
-import { generateBuildBrief, generateHandoff } from "./handoff.js";
+import { buildHandoffFiles } from "./handoff.js";
 import { log, errMsg } from "./log.js";
 
 export interface OrchestratorConfig {
@@ -327,24 +327,10 @@ export class Orchestrator {
   async handoff(projectId: string, stack?: string): Promise<boolean> {
     const p = await this.store.load(projectId);
     if (!p) return false;
-    const md = generateHandoff(p);
-    const files: { name: string; data: Buffer }[] = [
-      { name: `handoff-${p.id}.md`, data: Buffer.from(md, "utf8") },
-      { name: `BUILD.md`, data: Buffer.from(generateBuildBrief(p, stack), "utf8") },
-    ];
-    const cur = currentVersion(p);
-    if (cur) {
-      const html = await this.store.readHtml(p.id, cur.id);
-      if (html) files.push({ name: `${cur.id}.html`, data: Buffer.from(html, "utf8") });
-      const png = await this.store.readPng(p.id, cur.id);
-      if (png) files.push({ name: `${cur.id}.png`, data: png });
-    }
-    await this.surface.postFiles(
-      p,
-      files,
-      `📦 Handoff for **${p.brief}** — ${p.decisions.length} decision${p.decisions.length === 1 ? "" : "s"}, ${p.constraints.length} constraint${p.constraints.length === 1 ? "" : "s"}, ${p.versions.length} version${p.versions.length === 1 ? "" : "s"}.\n` +
-        `\`BUILD.md\` is written for a coding agent${stack ? ` targeting **${stack}**` : ""}: drop it and the HTML into Claude Code, Codex or Grok and say "build this".`,
-    );
+    const { files, text } = await buildHandoffFiles(this.store, p, stack);
+    await this.surface.postFiles(p, files, text);
+    p.transcript.push({ id: shortId("t_"), at: nowIso(), kind: "system", name: "system", text: `Handoff posted (${files.map((f) => f.name).join(", ")}).`, seen: true });
+    await this.store.save(p);
     return true;
   }
 

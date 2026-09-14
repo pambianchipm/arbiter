@@ -1,5 +1,6 @@
 import type { Project } from "./types.js";
 import { currentVersion } from "./types.js";
+import type { Store } from "./store.js";
 
 /**
  * Deterministic handoff spec: everything an engineer needs to build the final version,
@@ -171,4 +172,25 @@ export function generateBuildBrief(p: Project, stack?: string): string {
   if (cur) L.push(`- \`${cur.id}.png\` — what it should look like`);
   L.push(`- \`handoff-${p.id}.md\` — full decision log with timestamps and votes`);
   return L.join("\n");
+}
+
+
+/** Everything /handoff, the 📦 button and the agent's post_handoff tool post. */
+export async function buildHandoffFiles(store: Store, p: Project, stack?: string): Promise<{ files: { name: string; data: Buffer }[]; text: string }> {
+  const files: { name: string; data: Buffer }[] = [
+    { name: `handoff-${p.id}.md`, data: Buffer.from(generateHandoff(p), "utf8") },
+    { name: "BUILD.md", data: Buffer.from(generateBuildBrief(p, stack), "utf8") },
+  ];
+  const cur = currentVersion(p);
+  if (cur) {
+    const html = await store.readHtml(p.id, cur.id);
+    if (html) files.push({ name: `${cur.id}.html`, data: Buffer.from(html, "utf8") });
+    const png = await store.readPng(p.id, cur.id);
+    if (png) files.push({ name: `${cur.id}.png`, data: png });
+  }
+  const n = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
+  const text =
+    `📦 Handoff for **${p.brief}** — ${n(p.decisions.length, "decision")}, ${n(p.constraints.length, "constraint")}, ${n(p.versions.length, "version")}.\n` +
+    `\`BUILD.md\` is written for a coding agent${stack ? ` targeting **${stack}**` : ""}: drop it and the HTML into Claude Code, Codex or Grok and say "build this". \`${cur?.id ?? "vN"}.html\` runs anywhere as-is.`;
+  return { files, text };
 }

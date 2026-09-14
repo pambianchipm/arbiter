@@ -149,7 +149,7 @@ async function main(): Promise<void> {
 
   // ---- Votes → auto-resolve when everyone voted → Turn 3 builds winner
   fake.push(
-    msg([toolUse("publish_version", { html: HTML_V3, summary: "Airy hero (A won 2–1)", changes: ["Hero padding increased", "Kept three value props"], addresses: ["Sam", "Priya", "Lee"] }), toolUse("log_decision", { summary: "Airy hero over dense hero", requested_by: ["Sam"], rationale: "A won the vote 2–1", version_id: "v3" }), toolUse("add_constraint", { text: "No carousel component exists", source: "Lee" })], "tool_use"),
+    msg([toolUse("publish_version", { html: HTML_V3, summary: "Airy hero (A won 2–1)", changes: ["Hero padding increased", "Kept three value props"], addresses: ["Sam", "Priya", "Lee"] }), toolUse("log_decision", { summary: "Airy hero over dense hero", requested_by: ["Sam"], rationale: "A won the vote 2–1", version_id: "v3" }), toolUse("add_constraint", { text: "No carousel component exists", source: "Lee" }), toolUse("post_handoff", { stack: "Next.js + Tailwind" })], "tool_use"),
     msg([text("v3 is the airy hero. Lee, noted: no carousels.")], "end_turn"),
   );
   console.log("\n▶ turn 3: votes");
@@ -164,6 +164,7 @@ async function main(): Promise<void> {
   assert(!p.fork && p.forkHistory.length === 1 && p.forkHistory[0].resolved?.winner === "a", "fork moved to history with winner A");
   assert(p.currentVersionId === "v3", "v3 built from the winner");
   assert(p.decisions.length === 1 && p.constraints.length === 1, "decision + constraint logged");
+  assert(surface.log.some((l) => l.includes("Handoff for") && l.includes("BUILD.md") && l.includes("Next.js + Tailwind")), "agent's post_handoff tool posted the package with the stack");
   const t3 = fake.calls[fake.calls.length - 2].messages[0].content;
   const t3text = typeof t3 === "string" ? t3 : t3.map((b) => (b.type === "text" ? b.text : "")).join("\n");
   assert(/fork f2 resolved .* A \(A 2, B 1\)/.test(t3text), "turn prompt carries the tally");
