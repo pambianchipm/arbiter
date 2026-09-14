@@ -3,15 +3,27 @@ import type { Surface } from "../surface.js";
 import type { Fork, Project, Question, Version } from "../types.js";
 import { chunk, forkEdit, forkMessage, versionMessage } from "./ui.js";
 import { log, errMsg } from "../log.js";
+import { explainDiscordError } from "./errors.js";
 
 export class DiscordSurface implements Surface {
   constructor(private readonly client: Client) {}
 
   private async channel(p: Project): Promise<SendableChannels> {
-    const ch = await this.client.channels.fetch(p.threadId);
+    const ch = await this.client.channels.fetch(p.threadId).catch((e) => {
+      throw new Error(explainDiscordError(e));
+    });
     if (!ch || !ch.isSendable()) throw new Error(`thread ${p.threadId} is not a sendable channel`);
     if (ch.isThread() && ch.archived) await ch.setArchived(false).catch(() => undefined);
     return ch;
+  }
+
+  /** send with Discord errors translated into instructions */
+  private async send(ch: SendableChannels, payload: Parameters<SendableChannels["send"]>[0]) {
+    try {
+      return await ch.send(payload);
+    } catch (e) {
+      throw new Error(explainDiscordError(e));
+    }
   }
 
   mention(userId: string): string {
@@ -21,19 +33,19 @@ export class DiscordSurface implements Surface {
   async postText(p: Project, text: string): Promise<void> {
     const ch = await this.channel(p);
     for (const part of chunk(text)) {
-      await ch.send({ content: part, allowedMentions: { parse: ["users"] } });
+      await this.send(ch, { content: part, allowedMentions: { parse: ["users"] } });
     }
   }
 
   async postVersion(p: Project, version: Version, png: Buffer): Promise<{ messageId?: string }> {
     const ch = await this.channel(p);
-    const msg = await ch.send(versionMessage(p, version, png));
+    const msg = await this.send(ch, versionMessage(p, version, png));
     return { messageId: msg.id };
   }
 
   async postFork(p: Project, fork: Fork, png: Buffer): Promise<{ messageId?: string }> {
     const ch = await this.channel(p);
-    const msg = await ch.send(forkMessage(p, fork, png));
+    const msg = await this.send(ch, forkMessage(p, fork, png));
     return { messageId: msg.id };
   }
 
@@ -51,12 +63,12 @@ export class DiscordSurface implements Surface {
   async postQuestion(p: Project, q: Question, mentionUserIds: string[]): Promise<void> {
     const ch = await this.channel(p);
     const who = mentionUserIds.length ? mentionUserIds.map((id) => `<@${id}>`).join(" ") : `**${q.to}**`;
-    await ch.send({ content: `❓ ${who} — ${q.text}`.slice(0, 2000), allowedMentions: { users: mentionUserIds } });
+    await this.send(ch, { content: `❓ ${who} — ${q.text}`.slice(0, 2000), allowedMentions: { users: mentionUserIds } });
   }
 
   async postFiles(p: Project, files: { name: string; data: Buffer }[], text: string): Promise<void> {
     const ch = await this.channel(p);
-    await ch.send({ content: text.slice(0, 2000), files: files.map((f) => new AttachmentBuilder(f.data, { name: f.name })) });
+    await this.send(ch, { content: text.slice(0, 2000), files: files.map((f) => new AttachmentBuilder(f.data, { name: f.name })) });
   }
 
   async typing(p: Project): Promise<void> {

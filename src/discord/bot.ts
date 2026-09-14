@@ -20,6 +20,7 @@ import type { ImageInput, Role } from "../types.js";
 import { approvalsFooter, feedbackModal } from "./ui.js";
 import { registerCommands } from "./register.js";
 import { log, errMsg } from "../log.js";
+import { explainDiscordError } from "./errors.js";
 
 export function createDiscordClient(): Client {
   return new Client({
@@ -93,11 +94,11 @@ export function attachHandlers(client: Client, orch: Orchestrator): void {
   });
 
   client.on(Events.MessageCreate, (m) => {
-    void onMessage(client, orch, m).catch((e) => log.error("message handler", errMsg(e)));
+    void onMessage(client, orch, m).catch((e) => log.error("message handler:", explainDiscordError(e)));
   });
 
   client.on(Events.InteractionCreate, (i) => {
-    void onInteraction(orch, i).catch((e) => log.error("interaction handler", errMsg(e)));
+    void onInteraction(orch, i).catch((e) => log.error("interaction handler:", explainDiscordError(e)));
   });
 
   client.on(Events.Error, (e) => log.error("discord client", errMsg(e)));
@@ -132,7 +133,13 @@ async function onMessage(client: Client, orch: Orchestrator, m: Message): Promis
       await m.reply("Tell me what to build: `@Arbiter landing page for a coffee subscription` (attach a whiteboard photo if you have one), or use `/design`.");
       return;
     }
-    const thread = await m.startThread({ name: threadName(brief || "sketch"), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay });
+    let thread;
+    try {
+      thread = await m.startThread({ name: threadName(brief || "sketch"), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay });
+    } catch (e) {
+      await m.reply(`I couldn't open a thread here. ${explainDiscordError(e)}`).catch(() => undefined);
+      return;
+    }
     const urlInBrief = /(https?:\/\/\S+)/.exec(brief)?.[1];
     await orch.startProject({
       threadId: thread.id,
@@ -172,7 +179,13 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction): Pr
         return;
       }
       await i.deferReply();
-      const thread = await ch.threads.create({ name: threadName(brief), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay, reason: "Arbiter design session" });
+      let thread;
+      try {
+        thread = await ch.threads.create({ name: threadName(brief), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay, reason: "Arbiter design session" });
+      } catch (e) {
+        await i.editReply(`I couldn't open a thread here. ${explainDiscordError(e)}`);
+        return;
+      }
       const images = sketch ? await collectImages([sketch], "sketch attached with the brief") : [];
       await orch.startProject({
         threadId: thread.id,

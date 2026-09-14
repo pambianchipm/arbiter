@@ -7,6 +7,7 @@ import { Agent } from "./agent/run.js";
 import { Orchestrator } from "./orchestrator.js";
 import { createDiscordClient, attachHandlers } from "./discord/bot.js";
 import { DiscordSurface } from "./discord/surface.js";
+import { explainDiscordError } from "./discord/errors.js";
 import { log, errMsg } from "./log.js";
 
 async function main(): Promise<void> {
@@ -38,7 +39,11 @@ async function main(): Promise<void> {
   await orch.resume();
 
   attachHandlers(client, orch);
-  await client.login(config.discord.token);
+  try {
+    await client.login(config.discord.token);
+  } catch (e) {
+    throw new Error(explainDiscordError(e));
+  }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
 
   const shutdown = async (sig: string) => {
