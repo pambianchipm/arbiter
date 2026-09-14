@@ -11,7 +11,7 @@ import {
   type VoiceConnection,
 } from "@discordjs/voice";
 import prism from "prism-media";
-import type { Client, VoiceBasedChannel } from "discord.js";
+import { PermissionFlagsBits, type Client, type VoiceBasedChannel } from "discord.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { Surface } from "../surface.js";
 import type { SpeechToText } from "./stt.js";
@@ -65,6 +65,22 @@ export class VoiceManager {
     }
     await this.leave(projectId);
 
+    // Fail with the exact missing permission instead of a 15s timeout.
+    const me = channel.guild.members.me ?? (await channel.guild.members.fetchMe().catch(() => null));
+    const perms = me ? channel.permissionsFor(me) : null;
+    const need: [bigint, string][] = [
+      [PermissionFlagsBits.ViewChannel, "View Channel"],
+      [PermissionFlagsBits.Connect, "Connect"],
+      [PermissionFlagsBits.Speak, "Speak"],
+    ];
+    const missing = perms ? need.filter(([bit]) => !perms.has(bit)).map(([, name]) => name) : [];
+    if (missing.length) {
+      throw new Error(`The bot is missing ${missing.join(" and ")} on #${channel.name}. Server Settings → Roles → Arbiter → Voice, or the channel's own permission overrides.`);
+    }
+    if (channel.userLimit && channel.members.size >= channel.userLimit && !channel.members.has(me?.id ?? "")) {
+      throw new Error(`#${channel.name} is full (limit ${channel.userLimit}).`);
+    }
+
     const connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -72,11 +88,21 @@ export class VoiceManager {
       selfDeaf: false,
       selfMute: false,
     });
+    connection.on("stateChange", (o, n) => log.info(`voice: ${o.status} → ${n.status}`));
+    connection.on("error", (e) => log.warn("voice connection error:", errMsg(e)));
+    if (process.env.VOICE_DEBUG === "1") connection.on("debug", (m) => log.info("voice debug:", m));
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
     } catch {
+      const stuck = connection.state.status;
       connection.destroy();
-      throw new Error("Could not connect to the voice channel within 15s. Check the bot has Connect and Speak in that channel.");
+      const hint =
+        stuck === VoiceConnectionStatus.Signalling
+          ? "Discord never sent the voice server details (stuck in signalling). Usually the GuildVoiceStates intent is missing from the client or the bot lacks Connect."
+          : stuck === VoiceConnectionStatus.Connecting
+            ? "The UDP/encryption handshake did not finish (stuck in connecting). Check the terminal's voice dependency report for missing encryption/DAVE libraries, and that the network allows UDP."
+            : `last state: ${stuck}`;
+      throw new Error(`Could not connect to #${channel.name} within 20s. ${hint}`);
     }
 
     const player = createAudioPlayer();

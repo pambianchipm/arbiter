@@ -9,6 +9,7 @@ import { createDiscordClient, attachHandlers } from "./discord/bot.js";
 import { DiscordSurface } from "./discord/surface.js";
 import { explainDiscordError } from "./discord/errors.js";
 import { VoiceManager } from "./voice/manager.js";
+import { generateDependencyReport } from "@discordjs/voice";
 import { pickSTT } from "./voice/stt.js";
 import { ElevenLabsTTS } from "./voice/tts.js";
 import { log, errMsg } from "./log.js";
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
   log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"}`);
+  if (stt) log.info("voice dependency report:\n" + generateDependencyReport());
 
   const shutdown = async (sig: string) => {
     log.info(`${sig} — shutting down`);
