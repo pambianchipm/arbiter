@@ -14,5 +14,5 @@ export interface Surface {
   /** best-effort typing indicator while a turn runs */
   typing(project: Project): Promise<void>;
   /** format a user mention for this surface */
-  mention(userId: string): string;
+  mention(userId: string, project?: Project): string;
 }

@@ -9,8 +9,8 @@ export class ConsoleSurface implements Surface {
     this.log.push(s);
     console.log(`\x1b[36m[thread]\x1b[0m ${s}`);
   }
-  mention(userId: string): string {
-    return `@${userId}`;
+  mention(userId: string, project?: Project): string {
+    return `@${project?.participants[userId]?.name ?? userId}`;
   }
   async postText(_p: Project, text: string): Promise<void> {
     this.say(text);
@@ -26,8 +26,8 @@ export class ConsoleSurface implements Surface {
   async updateForkTally(p: Project, f: Fork): Promise<void> {
     this.say(`🗳️ ${tallyText(p, f)}`);
   }
-  async postQuestion(_p: Project, q: Question, ids: string[]): Promise<void> {
-    this.say(`❓ ${ids.length ? ids.map((i) => "@" + i).join(" ") : q.to} — ${q.text}`);
+  async postQuestion(p: Project, q: Question, ids: string[]): Promise<void> {
+    this.say(`❓ ${ids.length ? ids.map((i) => this.mention(i, p)).join(" ") : q.to} — ${q.text}`);
   }
   async postFiles(_p: Project, files: { name: string; data: Buffer }[], text: string): Promise<void> {
     this.say(`${text}\n   files: ${files.map((f) => `${f.name} (${f.data.length}b)`).join(", ")}`);

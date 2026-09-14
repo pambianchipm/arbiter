@@ -40,7 +40,7 @@ async function main(): Promise<void> {
     fallbacks: process.env.ARBITER_FALLBACKS !== "0",
   });
   const surface = new ConsoleSurface();
-  const orch = new Orchestrator(store, shots, surface, agent, { baseUrl: `http://localhost:${port}`, debounceMs: 3000, nudgeMinutes: 1, forkTimeoutMinutes: 2 });
+  const orch = new Orchestrator(store, shots, surface, agent, { baseUrl: `http://localhost:${port}`, debounceMs: 8000, nudgeMinutes: 2, forkTimeoutMinutes: 3 });
 
   const threadId = `dry_${Date.now().toString(36)}`;
   const referenceUrl = /(https?:\/\/\S+)/.exec(brief)?.[1];
@@ -112,14 +112,17 @@ async function main(): Promise<void> {
     m = /^(\w+)(?:\((\w+)\))?:\s*(.+)$/.exec(line);
     if (m && !/^https?$/i.test(m[1])) {
       const w = who(m[1], m[2]);
-      return orch.addHumanMessage(threadId, { ...w, text: m[3] });
+      await orch.addHumanMessage(threadId, { ...w, text: m[3] });
+      console.log(`   ⏳ queued from ${w.name}; the agent acts in 8s unless more messages land (type a second person's line now to stage a conflict)`);
+      return;
     }
     if (line.startsWith("/")) {
       console.log("Unknown command. /help lists them.");
       return;
     }
     // Anything else is you, the PM, talking.
-    return orch.addHumanMessage(threadId, { userId: "you", name: "You", role: "pm", text: line });
+    await orch.addHumanMessage(threadId, { userId: "you", name: "You", role: "pm", text: line });
+    console.log("   ⏳ queued from You; the agent acts in 8s unless more messages land");
   }
   ask();
 }

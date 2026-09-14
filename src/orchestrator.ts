@@ -386,6 +386,12 @@ export class Orchestrator {
     this.nudgeTimers.delete(projectId);
     const p = await this.store.load(projectId);
     if (!p || p.status !== "active" || p.currentVersionId !== versionId || p.nudgedFor === versionId) return;
+    if (p.fork && !p.fork.resolved) return; // the vote timer owns nudging while a fork is open
+    if (this.store.isWorking(p.id)) {
+      // A turn is in flight; check again shortly rather than talking over it.
+      this.nudgeTimers.set(projectId, setTimeout(() => void this.fireNudge(projectId, versionId), 30_000));
+      return;
+    }
     const v = currentVersion(p);
     if (!v) return;
     const spokeSince = new Set(p.transcript.filter((t) => t.kind === "human" && t.at > v.createdAt).map((t) => t.userId));
@@ -395,7 +401,7 @@ export class Orchestrator {
     const ask = open ? `Open question for ${open.to}: ${open.text}` : `Does ${v.id} work for you? Reply here or hit ✅ Approve.`;
     p.nudgedFor = versionId;
     await this.store.save(p);
-    await this.surface.postText(p, `⏰ Still waiting on ${silent.map((x) => this.surface.mention(x.id)).join(", ")}. ${ask}`);
+    await this.surface.postText(p, `⏰ Still waiting on ${silent.map((x) => this.surface.mention(x.id, p)).join(", ")}. ${ask}`);
   }
 
   private scheduleForkTimeout(projectId: string, f: Fork): void {
@@ -423,7 +429,7 @@ export class Orchestrator {
       await this.resolveFork(projectId, forkId, "timeout");
     } else {
       const ids = Object.keys(p.participants);
-      await this.surface.postText(p, `🗳️ No votes yet on "${f.question}". ${ids.map((id) => this.surface.mention(id)).join(", ")} — tap A or B above, or ⚖️ Resolve to let the role rule decide.`);
+      await this.surface.postText(p, `🗳️ No votes yet on "${f.question}". ${ids.map((id) => this.surface.mention(id, p)).join(", ")} — tap A or B above, or ⚖️ Resolve to let the role rule decide.`);
       this.scheduleForkTimeout(projectId, f); // one more window
     }
   }
