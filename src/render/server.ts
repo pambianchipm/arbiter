@@ -176,9 +176,12 @@ const SERVER_STARTED = new Date().toISOString().replace("T", " ").slice(0, 19) +
 
 function indexPage(projects: Array<import("../types.js").Project & { working: boolean }>, missing?: string): string {
   const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
-  const notice = missing
-    ? `<div class="notice">No session called <code>${esc(missing)}</code> on this server (data dir: <code>${esc(path.resolve(process.env.DATA_DIR || "./data"))}</code>). ${projects.length ? "Pick one below." : "If you expected one, a different Arbiter process (other folder or port) probably owns it."}</div>`
+  const noKey = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN
+    ? `<div class="notice">🔑 <b>This server has no Anthropic API key, so every turn will fail.</b> In the <code>arbiter</code> folder run <code>cp .env.example .env</code>, open <code>.env</code>, paste your key after <code>ANTHROPIC_API_KEY=</code>, save, then restart the dry run (<code>/quit</code>, then <code>npm run dry -- "…"</code>).</div>`
     : "";
+  const notice = noKey + (missing
+    ? `<div class="notice">No session called <code>${esc(missing)}</code> on this server (data dir: <code>${esc(path.resolve(process.env.DATA_DIR || "./data"))}</code>). ${projects.length ? "Pick one below." : "If you expected one, a different Arbiter process (other folder or port) probably owns it."}</div>`
+    : "");
   const rows = projects.length
     ? projects
         .map((p) => {

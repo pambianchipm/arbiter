@@ -123,7 +123,10 @@ export class Agent {
 }
 
 function describeApiError(e: unknown): string {
-  if (e instanceof Anthropic.AuthenticationError) return "Anthropic auth failed (check ANTHROPIC_API_KEY in .env).";
+  if (e instanceof Anthropic.AuthenticationError) return "Anthropic rejected the API key (check ANTHROPIC_API_KEY in .env).";
+  if (errMsg(e).includes("Could not resolve authentication method")) {
+    return "No Anthropic API key found. In the arbiter folder run `cp .env.example .env`, put your key after ANTHROPIC_API_KEY= in .env, then restart.";
+  }
   if (e instanceof Anthropic.NotFoundError) return `Model not found (${e.message}). Check ARBITER_MODEL in .env.`;
   if (e instanceof Anthropic.PermissionDeniedError) return `Permission denied by the Claude API: ${e.message}`;
   if (e instanceof Anthropic.RateLimitError) return "Rate limited by the Claude API; try again in a moment.";
