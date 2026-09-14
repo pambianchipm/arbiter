@@ -1,7 +1,8 @@
 /**
  * Dry run: the real agent with a console "thread" instead of Discord.
  *   npm run dry -- "landing page for a coffee subscription"
- * Then type lines as people:  sam(designer): more whitespace
+ * Type feedback as yourself (you're the PM), or as other people:  sam(designer): more whitespace
+ * A conflict needs two different people, e.g.  sam(designer): more whitespace  then  priya(pm): denser
  * Commands: /vote <name> a|b · /resolve · /approve <name> · /constraint <name>: text · /handoff · /status · /quit
  */
 import Anthropic from "@anthropic-ai/sdk";
@@ -42,12 +43,14 @@ async function main(): Promise<void> {
   const orch = new Orchestrator(store, shots, surface, agent, { baseUrl: `http://localhost:${port}`, debounceMs: 3000, nudgeMinutes: 1, forkTimeoutMinutes: 2 });
 
   const threadId = `dry_${Date.now().toString(36)}`;
+  const referenceUrl = /(https?:\/\/\S+)/.exec(brief)?.[1];
   console.log(`model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
   const url = `http://localhost:${port}/live/${threadId}`;
   const bar = "═".repeat(Math.max(40, url.length + 20));
   console.log(`\n╔${bar}╗\n║  📺 Live canvas:  ${url}${" ".repeat(Math.max(0, bar.length - url.length - 19))}║\n║  All sessions:    http://localhost:${port}/live${" ".repeat(Math.max(0, bar.length - `http://localhost:${port}/live`.length - 19))}║\n╚${bar}╝\n`);
   console.log("Kickoff is running. The first render takes ~30–90s; you'll see 📐 v1 when it lands. Type feedback any time, e.g.  sam(designer): more whitespace\n");
-  await orch.startProject({ threadId, channelId: "console", brief, createdBy: { id: "you", name: "You", role: "pm" } });
+  console.log("You are the PM. Type feedback as yourself, or as others:  sam(designer): more whitespace   ·   /help for commands\n");
+  await orch.startProject({ threadId, channelId: "console", brief, referenceUrl, createdBy: { id: "you", name: "You", role: "pm" } });
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (): void => rl.question("> ", (line) => void handle(line.trim()).then(ask));
@@ -68,18 +71,29 @@ async function main(): Promise<void> {
       server.close();
       process.exit(0);
     }
+    if (line === "/help") {
+      console.log([
+        "  <text>                    feedback from You (pm)",
+        "  sam(designer): <text>     feedback from someone else (roles: designer, pm, eng, stakeholder)",
+        "  make it feel like https://linear.app     → the agent studies the site and adopts its palette/type",
+        "  /vote <name> a|b · /resolve · /approve <name> · /constraint <name>: <text> · /handoff · /status · /quit",
+      ].join("\n"));
+      return;
+    }
     if (line === "/status") return console.log(await orch.statusText(threadId));
     if (line === "/handoff") return void (await orch.handoff(threadId));
     if (line === "/resolve") {
       const p = await store.load(threadId);
-      if (p?.fork) console.log(await orch.resolveFork(threadId, p.fork.id, "console"));
+      if (p?.fork && !p.fork.resolved) console.log(await orch.resolveFork(threadId, p.fork.id, "console"));
+      else console.log("No vote is open right now.");
       return;
     }
     let m = /^\/vote\s+(\w+)\s+([ab])$/i.exec(line);
     if (m) {
       const p = await store.load(threadId);
       const w = who(m[1]);
-      if (p?.fork) console.log(await orch.vote(threadId, p.fork.id, w.userId, w.name, m[2].toLowerCase() as "a" | "b"));
+      if (p?.fork && !p.fork.resolved) console.log(await orch.vote(threadId, p.fork.id, w.userId, w.name, m[2].toLowerCase() as "a" | "b"));
+      else console.log("No vote is open right now. A vote opens when two people ask for incompatible things.");
       return;
     }
     m = /^\/approve\s+(\w+)$/i.exec(line);
@@ -87,6 +101,7 @@ async function main(): Promise<void> {
       const p = await store.load(threadId);
       const w = who(m[1]);
       if (p?.currentVersionId) console.log(await orch.approve(threadId, p.currentVersionId, w.userId, w.name));
+      else console.log("Nothing to approve yet.");
       return;
     }
     m = /^\/constraint\s+(\w+):\s*(.+)$/i.exec(line);
@@ -95,11 +110,16 @@ async function main(): Promise<void> {
       return orch.addConstraint(threadId, m[2], w.userId, w.name);
     }
     m = /^(\w+)(?:\((\w+)\))?:\s*(.+)$/.exec(line);
-    if (m) {
+    if (m && !/^https?$/i.test(m[1])) {
       const w = who(m[1], m[2]);
       return orch.addHumanMessage(threadId, { ...w, text: m[3] });
     }
-    console.log("format:  name(role): message   e.g.  sam(designer): more whitespace");
+    if (line.startsWith("/")) {
+      console.log("Unknown command. /help lists them.");
+      return;
+    }
+    // Anything else is you, the PM, talking.
+    return orch.addHumanMessage(threadId, { userId: "you", name: "You", role: "pm", text: line });
   }
   ask();
 }
