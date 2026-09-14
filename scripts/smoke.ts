@@ -65,6 +65,14 @@ function assert(cond: unknown, label: string): void {
 }
 
 async function main(): Promise<void> {
+  // Discord validates slash-command shapes at import time (name ≤32, descriptions ≤100, etc.).
+  console.log("▶ slash commands");
+  const { commands } = await import("../src/discord/commands.js");
+  for (const c of commands) {
+    assert(c.description.length <= 100, `/${c.name} description ≤100 chars (${c.description.length})`);
+    for (const o of c.options ?? []) assert(o.description.length <= 100, `/${c.name} ${o.name} option description ≤100 chars`);
+  }
+
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "arbiter-smoke-"));
   const store = new Store(dataDir);
   await store.init();
