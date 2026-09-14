@@ -85,11 +85,12 @@ function threadName(brief: string): string {
 
 export function attachHandlers(client: Client, orch: Orchestrator): void {
   client.once(Events.ClientReady, async (c) => {
-    log.info(`discord ready as ${c.user.tag}`);
+    const guilds = c.guilds.cache.map((g) => ({ id: g.id, name: g.name }));
+    log.info(`discord ready as ${c.user.tag} · in ${guilds.length} server(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(", ") || "none — invite it first"}`);
     try {
-      await registerCommands();
+      await registerCommands(guilds);
     } catch (e) {
-      log.error("command registration failed", errMsg(e));
+      log.error(errMsg(e));
     }
   });
 
