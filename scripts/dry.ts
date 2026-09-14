@@ -54,6 +54,7 @@ async function main(): Promise<void> {
   const people = new Map<string, { id: string; role?: Role }>();
   const who = (name: string, role?: string) => {
     const key = name.toLowerCase();
+    if (key === "you" || key === "me") return { userId: "you", name: "You", role: "pm" as Role }; // the session creator
     if (!people.has(key)) people.set(key, { id: `u_${key}`, role: role as Role | undefined });
     const p = people.get(key)!;
     if (role) p.role = role as Role;
