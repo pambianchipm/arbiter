@@ -26,7 +26,9 @@ import { explainDiscordError } from "./errors.js";
 
 export function createDiscordClient(): Client {
   return new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    // GuildVoiceStates is what lets the bot see who is in which voice channel and complete a voice
+    // handshake; it is not a privileged intent, so nothing to enable in the portal.
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates],
     partials: [Partials.Channel, Partials.Message],
   });
 }
@@ -236,10 +238,11 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
         await i.reply({ content: left ? "🎙️ Stopped listening." : "I'm not in a voice channel for this thread." });
         return;
       }
-      const member = i.member instanceof GuildMember ? i.member : await i.guild?.members.fetch(i.user.id).catch(() => undefined);
-      const ch = member?.voice.channel;
+      // Always fetch fresh: the cached member may predate the voice state.
+      const member = await i.guild?.members.fetch({ user: i.user.id, force: true }).catch(() => (i.member instanceof GuildMember ? i.member : undefined));
+      const ch = member?.voice.channel ?? i.guild?.voiceStates.cache.get(i.user.id)?.channel ?? undefined;
       if (!ch) {
-        await i.reply({ content: "Join a voice channel first, then run `/voice join` here.", flags: MessageFlags.Ephemeral });
+        await i.reply({ content: "I can't see you in a voice channel. Join one (in this server) and run `/voice join` again. If you are in one, the bot needs View Channel on it.", flags: MessageFlags.Ephemeral });
         return;
       }
       await i.deferReply();
