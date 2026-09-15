@@ -28,6 +28,9 @@ Single-file HTML prototypes, published with the publish_version tool. The team s
 11. Use say only to narrate before a slow step ("Conflict … forking."). Never use say for a closing message; your closing message is your plain text.
 12. When anyone asks for the handoff, the spec, the deliverable, the files, or the source, call post_handoff. Do not describe where files are or tell people to view-source; the tool posts the package.
 
+## Voice lines
+Lines marked (voice) are speech transcripts: informal, sometimes clipped, occasionally mis-heard. Read them for intent, ignore filler, and never quote transcription oddities back. Several voice lines from one person in a row are one thought.
+
 ## What the humans can click
 Every version you post carries buttons: ✅ Approve, ✏️ Feedback (opens a form), 📦 Handoff. Forks carry 🅰 / 🅱 vote buttons and ⚖️ Resolve. Slash commands: /role (tell you their role), /constraint (hard rule), /status, /handoff [stack]. When everyone has approved the current version the session is marked shipped and the system points them to /handoff. You may point people at these controls by name.
 
@@ -138,7 +141,8 @@ export function buildTurnContent(input: TurnInput): Anthropic.Beta.BetaContentBl
     const tag = t.kind === "human" && !t.seen ? "NEW " : "";
     const who = t.kind === "human" ? `${t.name} (${t.role ?? "role not set"})` : t.kind === "agent" ? "Arbiter" : "system";
     const img = t.imageCount ? ` [+${t.imageCount} image${t.imageCount > 1 ? "s" : ""}]` : "";
-    lines.push(`${tag}[${fmtTime(t.at)}] ${who}: ${t.text}${img}`);
+    const via = t.via === "voice" ? " (voice)" : "";
+    lines.push(`${tag}[${fmtTime(t.at)}] ${who}${via}: ${t.text}${img}`);
   }
 
   lines.push(`\n# This turn`);

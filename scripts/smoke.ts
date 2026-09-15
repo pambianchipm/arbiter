@@ -87,6 +87,9 @@ async function main(): Promise<void> {
   assert(wav.readUInt32LE(24) === 16_000 && wav.readUInt16LE(22) === 1 && wav.length === 44 + 16_000 * 2, "1s of 48k stereo → 1s of 16k mono");
   assert(Math.abs(audio.durationSeconds48kStereo(pcm) - 1) < 1e-9, "duration computed from pcm length");
   assert(audio.looksLikeHallucination("Thank you.") && audio.looksLikeHallucination("you") && !audio.looksLikeHallucination("more whitespace in the hero"), "hallucination filter");
+  const gate = await import("../src/voice/gate.js");
+  assert(gate.rmsLevel(pcm) > 8000 && gate.rmsLevel(Buffer.alloc(4000)) === 0, "rms level: tone loud, silence zero");
+  assert(gate.addressedToArbiter("hey Arbiter, make the hero denser") === "make the hero denser" && gate.addressedToArbiter("where's the coffee") === undefined, "address mode strips the name and rejects unaddressed lines");
   const vm = await import("../src/voice/manager.js");
   assert(typeof vm.VoiceManager === "function", "voice manager module loads (opus + DAVE deps resolve)");
   const stt = await import("../src/voice/stt.js");

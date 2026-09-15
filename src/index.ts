@@ -12,6 +12,7 @@ import { VoiceManager } from "./voice/manager.js";
 import { generateDependencyReport } from "@discordjs/voice";
 import { pickSTT } from "./voice/stt.js";
 import { ElevenLabsTTS } from "./voice/tts.js";
+import { RelevanceGate } from "./voice/gate.js";
 import { log, errMsg } from "./log.js";
 
 async function main(): Promise<void> {
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
   const orch = new Orchestrator(store, shots, surface, agent, {
     baseUrl: baseUrl(),
     debounceMs: config.debounceMs,
+    voiceDebounceMs: config.voice.debounceMs,
     nudgeMinutes: config.nudgeMinutes,
     forkTimeoutMinutes: config.forkTimeoutMinutes,
   });
@@ -44,7 +46,13 @@ async function main(): Promise<void> {
 
   const stt = pickSTT({ preference: config.voice.stt, elevenLabsKey: config.voice.elevenLabsKey || undefined, openaiKey: config.voice.openaiKey || undefined });
   const tts = config.voice.tts && config.voice.elevenLabsKey ? new ElevenLabsTTS(config.voice.elevenLabsKey, config.voice.elevenLabsVoiceId) : undefined;
-  const voice = new VoiceManager(client, orch, surface, stt, tts);
+  const gate = stt ? new RelevanceGate(anthropic, config.voice.gateModel) : undefined;
+  const voice = new VoiceManager(client, orch, surface, stt, tts, gate, {
+    mode: config.voice.mode === "address" ? "address" : "listen",
+    minSeconds: config.voice.minSeconds,
+    minRms: config.voice.minRms,
+    showIgnored: config.voice.showIgnored,
+  });
   orch.attachVoice(voice);
 
   attachHandlers(client, orch, voice);
@@ -54,7 +62,7 @@ async function main(): Promise<void> {
     throw new Error(explainDiscordError(e));
   }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
-  log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"}`);
+  log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"} · mode=${config.voice.mode} · gate=${gate ? config.voice.gateModel : "off"} · batch=${config.voice.debounceMs}ms`);
   if (stt) log.info("voice dependency report:\n" + generateDependencyReport());
 
   const shutdown = async (sig: string) => {

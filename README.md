@@ -61,7 +61,9 @@ Each server has a brand (more by name with `/brand new`). When a page is approve
 
 Join a voice channel, then in the design thread run `/voice join`. Arbiter joins, and from then on every utterance in that channel is transcribed and posted into the thread as `🎙️ Name: …`, attributed to whoever said it (Discord gives the bot a separate audio stream per speaker, so attribution is free), and handled exactly like a typed message: same batching, same conflict detection, same votes. Its questions and closing lines are spoken back. Keep the live canvas on a shared screen and it's a design review with the agent in the room.
 
-Needs `ELEVENLABS_API_KEY` (speech-to-text via Scribe, speech via TTS) or `OPENAI_API_KEY` (Whisper, listen-only), and the bot invited with **Connect** and **Speak**. `/voice leave` stops it. Utterances are cut on ~0.9s of silence; anything under 0.6s is ignored.
+Needs `ELEVENLABS_API_KEY` (speech-to-text via Scribe, speech via TTS) or `OPENAI_API_KEY` (Whisper, listen-only), and the bot invited with **Connect** and **Speak**. `/voice leave` stops it.
+
+It is deliberately hard to trigger by accident. Utterances are cut on ~0.9s of silence; anything under a second or quieter than mic noise is dropped. In **listen** mode (default) a fast, cheap model decides whether each line is feedback, a request, a decision, or an answer, and skips greetings, filler, and side conversation. Skipped lines appear small in the thread so you can see what was filtered. In **address** mode (`/voice join mode:address` or `/voice mode address`) it acts only on lines that say its name: "Arbiter, make the hero denser." Spoken feedback batches for 12 seconds so a whole exchange becomes one turn. Tune with `VOICE_*` in `.env`.
 
 ## Hand off to a coding agent
 

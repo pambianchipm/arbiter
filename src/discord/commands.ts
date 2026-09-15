@@ -37,6 +37,17 @@ export const commands = [
   new SlashCommandBuilder()
     .setName("voice")
     .setDescription("Let Arbiter listen in your voice channel and iterate on what the team says")
-    .addSubcommand((sc) => sc.setName("join").setDescription("Join the voice channel you're in and bind it to this design thread"))
+    .addSubcommand((sc) =>
+      sc
+        .setName("join")
+        .setDescription("Join the voice channel you're in and bind it to this design thread")
+        .addStringOption((o) => o.setName("mode").setDescription("listen = act on relevant talk (default) · address = only when someone says 'Arbiter'").addChoices({ name: "listen", value: "listen" }, { name: "address", value: "address" })),
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("mode")
+        .setDescription("Switch how much Arbiter reacts to")
+        .addStringOption((o) => o.setName("mode").setDescription("listen or address").setRequired(true).addChoices({ name: "listen", value: "listen" }, { name: "address", value: "address" })),
+    )
     .addSubcommand((sc) => sc.setName("leave").setDescription("Stop listening")),
 ].map((c) => c.toJSON());

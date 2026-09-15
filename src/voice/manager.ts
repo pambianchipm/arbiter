@@ -17,11 +17,24 @@ import type { Surface } from "../surface.js";
 import type { SpeechToText } from "./stt.js";
 import type { ElevenLabsTTS } from "./tts.js";
 import { durationSeconds48kStereo, looksLikeHallucination, pcm48kStereoToWav16kMono } from "./audio.js";
+import { addressedToArbiter, rmsLevel, type RelevanceGate } from "./gate.js";
 import { inferRole } from "../discord/people.js";
 import { log, errMsg } from "../log.js";
 
+export type VoiceMode = "listen" | "address";
+
+export interface VoiceOptions {
+  mode: VoiceMode;
+  minSeconds: number;
+  minRms: number;
+  showIgnored: boolean;
+}
+
 interface VoiceSession {
   projectId: string;
+  mode: VoiceMode;
+  /** last few accepted or ignored lines, for the relevance gate's context */
+  recent: string[];
   guildId: string;
   channelId: string;
   channelName: string;
@@ -49,7 +62,21 @@ export class VoiceManager {
     private readonly surface: Surface,
     private readonly stt: SpeechToText | undefined,
     private readonly tts: ElevenLabsTTS | undefined,
+    private readonly gate: RelevanceGate | undefined,
+    private readonly opts: VoiceOptions,
   ) {}
+
+  mode(projectId: string): VoiceMode | undefined {
+    return this.sessions.get(projectId)?.mode;
+  }
+
+  async setMode(projectId: string, mode: VoiceMode): Promise<boolean> {
+    const s = this.sessions.get(projectId);
+    if (!s) return false;
+    s.mode = mode;
+    await this.orch.setVoiceBinding(projectId, { channelId: s.channelId, channelName: s.channelName, since: new Date().toISOString(), mode });
+    return true;
+  }
 
   get sttName(): string | undefined {
     return this.stt?.name;
@@ -59,7 +86,7 @@ export class VoiceManager {
     return this.sessions.has(projectId);
   }
 
-  async join(projectId: string, channel: VoiceBasedChannel): Promise<string> {
+  async join(projectId: string, channel: VoiceBasedChannel, mode: VoiceMode = this.opts.mode): Promise<string> {
     if (!this.stt) {
       throw new Error("No speech-to-text is configured. Set ELEVENLABS_API_KEY (Scribe) or OPENAI_API_KEY (Whisper) in .env and restart.");
     }
@@ -109,6 +136,8 @@ export class VoiceManager {
     connection.subscribe(player);
     const session: VoiceSession = {
       projectId,
+      mode,
+      recent: [],
       guildId: channel.guild.id,
       channelId: channel.id,
       channelName: channel.name,
@@ -132,9 +161,13 @@ export class VoiceManager {
     player.on(AudioPlayerStatus.Idle, () => void this.playNext(session));
     player.on("error", (e) => log.warn("voice player", errMsg(e)));
 
-    await this.orch.setVoiceBinding(projectId, { channelId: channel.id, channelName: channel.name, since: new Date().toISOString() });
-    log.info(`voice: joined #${channel.name} for ${projectId} (stt=${this.stt.name}, tts=${this.tts ? "on" : "off"})`);
-    return `🎙️ Listening in **${channel.name}**. Everything said there is transcribed into this thread and attributed to whoever said it${this.tts ? ", and I'll answer out loud" : ""}. Keep the live canvas on a shared screen. \`/voice leave\` to stop.`;
+    await this.orch.setVoiceBinding(projectId, { channelId: channel.id, channelName: channel.name, since: new Date().toISOString(), mode });
+    log.info(`voice: joined #${channel.name} for ${projectId} (mode=${mode}, stt=${this.stt.name}, tts=${this.tts ? "on" : "off"}, gate=${this.gate ? "on" : "off"})`);
+    const how =
+      mode === "address"
+        ? `I only act on lines that say my name ("Arbiter, make the hero denser"); everything else stays between you.`
+        : `I act on feedback, requests and decisions about the page and ignore side talk${this.opts.showIgnored ? " (ignored lines show small, so you can see what I skipped)" : ""}.`;
+    return `🎙️ Listening in **${channel.name}** in **${mode}** mode. ${how}${this.tts ? " I'll answer out loud." : ""} \`/voice mode address|listen\` to switch, \`/voice leave\` to stop.`;
   }
 
   private onSpeakingStart(session: VoiceSession, userId: string): void {
@@ -173,7 +206,12 @@ export class VoiceManager {
   private async transcribeAndPost(session: VoiceSession, userId: string, pcm: Buffer): Promise<void> {
     if (!this.sessions.has(session.projectId)) return;
     const secs = durationSeconds48kStereo(pcm);
-    if (secs < 0.6) return; // coughs, clicks
+    if (secs < this.opts.minSeconds) return; // coughs, clicks, "yeah"
+    const rms = rmsLevel(pcm);
+    if (rms < this.opts.minRms) {
+      log.info(`🎙️ ignored quiet audio (${secs.toFixed(1)}s, rms ${Math.round(rms)} < ${this.opts.minRms})`);
+      return;
+    }
     const wav = pcm48kStereoToWav16kMono(pcm);
     const t0 = Date.now();
     let text: string;
@@ -190,9 +228,28 @@ export class VoiceManager {
     const name = member?.displayName ?? this.client.users.cache.get(userId)?.username ?? `user-${userId.slice(-4)}`;
     const p = await this.orch.get(session.projectId);
     if (!p) return;
-    log.info(`🎙️ ${name} (${secs.toFixed(1)}s, stt ${Date.now() - t0}ms): ${text}`);
-    await this.surface.postText(p, `🎙️ **${name}**: ${text}`);
-    await this.orch.addHumanMessage(session.projectId, { userId, name, text, role: inferRole(member) });
+
+    // Decide whether this line is for the agent at all.
+    let feed = text;
+    let ignoredWhy: string | undefined;
+    if (session.mode === "address") {
+      const addressed = addressedToArbiter(text);
+      if (addressed) feed = addressed;
+      else ignoredWhy = "not addressed to Arbiter";
+    } else if (this.gate) {
+      const verdict = await this.gate.check({ brief: p.brief, speaker: name, text, recent: session.recent.slice(-6) });
+      if (!verdict.actionable) ignoredWhy = verdict.why || "side talk";
+    }
+    session.recent.push(`${name}: ${text}`);
+    if (session.recent.length > 12) session.recent.shift();
+
+    log.info(`🎙️ ${name} (${secs.toFixed(1)}s, rms ${Math.round(rms)}, stt ${Date.now() - t0}ms)${ignoredWhy ? ` [ignored: ${ignoredWhy}]` : ""}: ${text}`);
+    if (ignoredWhy) {
+      if (this.opts.showIgnored) await this.surface.postText(p, `-# 🎙️ ${name}: ${text}  ·  skipped (${ignoredWhy})`).catch(() => undefined);
+      return;
+    }
+    await this.surface.postText(p, `🎙️ **${name}**: ${feed}`);
+    await this.orch.addHumanMessage(session.projectId, { userId, name, text: feed, role: inferRole(member), source: "voice" });
   }
 
   /** Speak text in the bound channel (queued, never overlapping). No-op without TTS. */

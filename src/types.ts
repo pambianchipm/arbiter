@@ -24,6 +24,8 @@ export interface TranscriptEntry {
   role?: Role;
   text: string;
   imageCount?: number;
+  /** "voice" when this line came from a voice-channel transcript */
+  via?: "voice";
   /** true once an agent turn has consumed this entry */
   seen?: boolean;
 }
@@ -138,7 +140,7 @@ export interface Project {
   /** persisted so any process (and the live canvas) can show what the agent is doing or why it failed */
   lastTurn?: { startedAt: string; endedAt?: string; reason: string; error?: string; toolCalls?: number; ms?: number };
   /** set while Arbiter is listening in a voice channel for this thread */
-  voice?: { channelId: string; channelName: string; since: string };
+  voice?: { channelId: string; channelName: string; since: string; mode?: "listen" | "address" };
 }
 
 export type TurnReason =

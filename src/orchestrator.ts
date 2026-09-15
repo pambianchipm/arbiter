@@ -12,6 +12,8 @@ import { log, errMsg } from "./log.js";
 export interface OrchestratorConfig {
   baseUrl: string;
   debounceMs: number;
+  /** longer window for spoken feedback so a whole exchange lands in one turn */
+  voiceDebounceMs?: number;
   nudgeMinutes: number;
   forkTimeoutMinutes: number;
 }
@@ -28,6 +30,7 @@ export interface HumanMessage {
   images?: ImageInput[];
   /** explicit role override (e.g. inferred from Discord roles) */
   role?: Role;
+  source?: "text" | "voice";
 }
 
 /**
@@ -157,6 +160,7 @@ export class Orchestrator {
       role: part.role,
       text: m.text.trim(),
       imageCount: m.images?.length || undefined,
+      via: m.source === "voice" ? "voice" : undefined,
       seen: false,
     });
     // A reply from a role answers open questions aimed at it.
@@ -168,10 +172,10 @@ export class Orchestrator {
     await this.store.save(p);
     this.cancelNudge(p.id);
     if (m.images?.length) this.pendingImages.set(p.id, [...(this.pendingImages.get(p.id) ?? []), ...m.images]);
-    this.scheduleFeedbackTurn(p.id);
+    this.scheduleFeedbackTurn(p.id, m.source === "voice" ? (this.cfg.voiceDebounceMs ?? this.cfg.debounceMs) : this.cfg.debounceMs);
   }
 
-  private scheduleFeedbackTurn(projectId: string): void {
+  private scheduleFeedbackTurn(projectId: string, delayMs: number): void {
     const existing = this.debounce.get(projectId);
     if (existing) clearTimeout(existing);
     this.debounce.set(
@@ -179,7 +183,7 @@ export class Orchestrator {
       setTimeout(() => {
         this.debounce.delete(projectId);
         void this.trigger(projectId, { kind: "feedback" });
-      }, this.cfg.debounceMs),
+      }, delayMs),
     );
   }
 

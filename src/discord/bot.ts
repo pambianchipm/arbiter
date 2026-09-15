@@ -268,6 +268,18 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
         await i.reply({ content: left ? "🎙️ Stopped listening." : "I'm not in a voice channel for this thread." });
         return;
       }
+      if (i.options.getSubcommand() === "mode") {
+        const mode = i.options.getString("mode", true) as "listen" | "address";
+        const ok = await voice.setMode(inProject, mode);
+        await i.reply({
+          content: ok
+            ? mode === "address"
+              ? "🎙️ Address mode: I only act when a line says my name, e.g. “Arbiter, make the hero denser.”"
+              : "🎙️ Listen mode: I act on feedback, requests and decisions about the page and skip side talk."
+            : "I'm not in a voice channel for this thread. `/voice join` first.",
+        });
+        return;
+      }
       // Always fetch fresh: the cached member may predate the voice state.
       const member = await i.guild?.members.fetch({ user: i.user.id, force: true }).catch(() => (i.member instanceof GuildMember ? i.member : undefined));
       const vs = i.guild?.voiceStates.cache.get(i.user.id);
@@ -294,7 +306,8 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       const ch = chAny;
       await i.deferReply();
       try {
-        await i.editReply(await voice.join(inProject, ch));
+        const mode = (i.options.getString("mode") as "listen" | "address" | null) ?? undefined;
+        await i.editReply(await voice.join(inProject, ch, mode));
       } catch (e) {
         await i.editReply(`Couldn't join: ${errMsg(e)}`);
       }
