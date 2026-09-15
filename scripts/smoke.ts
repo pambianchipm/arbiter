@@ -190,7 +190,7 @@ async function main(): Promise<void> {
   assert(!p.fork && p.forkHistory.length === 1 && p.forkHistory[0].resolved?.winner === "a", "fork moved to history with winner A");
   assert(p.currentVersionId === "v3", "v3 built from the winner");
   assert(p.decisions.length === 1 && p.constraints.length === 1, "decision + constraint logged");
-  assert(surface.log.some((l) => l.includes("Handoff for") && l.includes("BUILD.md") && l.includes("Next.js + Tailwind")), "agent's post_handoff tool posted the package with the stack");
+  assert(surface.log.some((l) => l.includes("Handoff for") && l.includes(".zip") && l.includes("Next.js + Tailwind")), "agent's post_handoff tool posted the zip with the stack");
   const t3 = fake.calls[fake.calls.length - 2].messages[0].content;
   const t3text = typeof t3 === "string" ? t3 : t3.map((b) => (b.type === "text" ? b.text : "")).join("\n");
   assert(/fork f2 resolved .* A \(A 2, B 1\)/.test(t3text), "turn prompt carries the tally");
@@ -205,7 +205,14 @@ async function main(): Promise<void> {
   assert(p.status === "shipped", "all approvals → shipped");
   assert(await orch.handoff(threadId), "handoff posted");
   const last = surface.log[surface.log.length - 1];
-  assert(last.includes("handoff-thread_smoke.md") && last.includes("BUILD.md") && last.includes("v3.html") && last.includes("v3.png"), "handoff attached spec + BUILD.md + html + png");
+  assert(last.includes("arbiter-landing-page-for-a-coffee-subscription.zip") && last.includes("v3.png"), "handoff posts one zip plus the screenshot");
+  {
+    const { buildHandoffFiles } = await import("../src/handoff.js");
+    const { unzipSync } = await import("fflate");
+    const built = await buildHandoffFiles(store, p, "Next.js + Tailwind", await store.loadBrand("guild", "default"));
+    const names = Object.keys(unzipSync(new Uint8Array(built.files[0].data)));
+    for (const want of ["README.md", "BUILD.md", "handoff.md", "index.html", "screenshot.png", "brand/brand.md", "brand/header.html", "brand/footer.html"]) assert(names.includes(want), `zip contains ${want}`);
+  }
   const { generateBuildBrief } = await import("../src/handoff.js");
   const brief = generateBuildBrief(p, "Next.js + Tailwind");
   assert(brief.includes("Next.js + Tailwind") && brief.includes("No carousel component exists") && brief.includes("Airy hero over dense hero") && brief.includes("Do not reopen"), "BUILD.md carries stack, constraints, decisions, settled forks");

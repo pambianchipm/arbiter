@@ -427,7 +427,7 @@ export class Orchestrator {
   async handoff(projectId: string, stack?: string): Promise<boolean> {
     const p = await this.store.load(projectId);
     if (!p) return false;
-    const { files, text } = await buildHandoffFiles(this.store, p, stack);
+    const { files, text } = await buildHandoffFiles(this.store, p, stack, await this.brandFor(p));
     await this.surface.postFiles(p, files, text);
     p.transcript.push({ id: shortId("t_"), at: nowIso(), kind: "system", name: "system", text: `Handoff posted (${files.map((f) => f.name).join(", ")}).`, seen: true });
     await this.store.save(p);

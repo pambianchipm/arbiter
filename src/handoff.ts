@@ -1,4 +1,5 @@
-import type { Project } from "./types.js";
+import { zipSync } from "fflate";
+import type { Brand, Project } from "./types.js";
 import { currentVersion } from "./types.js";
 import type { Store } from "./store.js";
 
@@ -175,22 +176,91 @@ export function generateBuildBrief(p: Project, stack?: string): string {
 }
 
 
-/** Everything /handoff, the 📦 button and the agent's post_handoff tool post. */
-export async function buildHandoffFiles(store: Store, p: Project, stack?: string): Promise<{ files: { name: string; data: Buffer }[]; text: string }> {
-  const files: { name: string; data: Buffer }[] = [
-    { name: `handoff-${p.id}.md`, data: Buffer.from(generateHandoff(p), "utf8") },
-    { name: "BUILD.md", data: Buffer.from(generateBuildBrief(p, stack), "utf8") },
-  ];
+function slug(x: string): string {
+  return x.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "page";
+}
+
+export function generateBrandDoc(b: Brand): string {
+  const L: string[] = [`# Brand: ${b.name}`, ``, `Design system as approved by the team across ${b.pages.length} page${b.pages.length === 1 ? "" : "s"}. Reuse \`header.html\`, \`footer.html\` and \`head.html\` verbatim on new pages.`, ``];
+  if (b.style) {
+    L.push(`## Tokens`, b.style.summary);
+    if (b.style.palette?.length) L.push(`- Palette: ${b.style.palette.join(", ")}`);
+    if (b.style.typography) L.push(`- Typography: ${b.style.typography}`);
+    if (b.style.spacing) L.push(`- Spacing: ${b.style.spacing}`);
+    if (b.style.vibe) L.push(`- Vibe: ${b.style.vibe}`);
+    L.push(``);
+  }
+  if (b.voice) L.push(`## Voice`, b.voice, ``);
+  L.push(`## Rules that hold on every page`);
+  if (!b.decisions.length) L.push(`_none yet_`);
+  for (const d of b.decisions) L.push(`- ${d.summary} — ${d.requestedBy.join(", ") || "team"}; ${d.rationale}`);
+  L.push(``, `## Constraints`);
+  if (!b.constraints.length) L.push(`_none_`);
+  for (const c of b.constraints) L.push(`- ${c.text} _(${c.source})_`);
+  L.push(``, `## Site map`);
+  for (const pg of b.pages) L.push(`- ${pg.brief} — \`site/${slug(pg.brief)}/index.html\` (${pg.versionId}, shipped ${pg.shippedAt.slice(0, 10)})`);
+  const people = Object.values(b.people);
+  if (people.length) L.push(``, `## People`, ...people.map((x) => `- ${x.name}${x.role ? ` — ${x.role}` : ""}`));
+  return L.join("\n");
+}
+
+/**
+ * Everything /handoff, the 📦 button and the agent's post_handoff tool post: one zip laid out for a
+ * coding agent, plus the screenshot so the thread still shows the image.
+ */
+export async function buildHandoffFiles(store: Store, p: Project, stack?: string, brand?: Brand): Promise<{ files: { name: string; data: Buffer }[]; text: string }> {
   const cur = currentVersion(p);
+  const entries: Record<string, Uint8Array> = {};
+  const put = (name: string, data: string | Buffer) => {
+    entries[name] = typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  };
+
+  put("BUILD.md", generateBuildBrief(p, stack));
+  put("handoff.md", generateHandoff(p));
+  let png: Buffer | undefined;
   if (cur) {
     const html = await store.readHtml(p.id, cur.id);
-    if (html) files.push({ name: `${cur.id}.html`, data: Buffer.from(html, "utf8") });
-    const png = await store.readPng(p.id, cur.id);
-    if (png) files.push({ name: `${cur.id}.png`, data: png });
+    if (html) put("index.html", html);
+    png = await store.readPng(p.id, cur.id);
+    if (png) put("screenshot.png", png);
   }
+  const readme = [
+    `# ${p.brief}`,
+    ``,
+    `Handoff package from Arbiter.`,
+    ``,
+    `- \`BUILD.md\` — start here: a brief for a coding agent (goal, non-negotiables, decisions to preserve, acceptance checklist).`,
+    `- \`index.html\` — the approved prototype (single file, Tailwind CDN). \`screenshot.png\` is what it should look like at 1280×800.`,
+    `- \`handoff.md\` — the full decision log with who asked, why, when, and how disagreements were settled.`,
+    brand ? `- \`brand/\` — the team's design system: tokens, voice, rules, and the shared header/footer/head to reuse verbatim.` : ``,
+    brand && brand.pages.some((pg) => pg.threadId !== p.id) ? `- \`site/\` — every other page already approved on this brand.` : ``,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  put("README.md", readme);
+
+  if (brand) {
+    put("brand/brand.md", generateBrandDoc(brand));
+    if (brand.chrome?.header) put("brand/header.html", brand.chrome.header);
+    if (brand.chrome?.footer) put("brand/footer.html", brand.chrome.footer);
+    if (brand.chrome?.head) put("brand/head.html", brand.chrome.head);
+    for (const pg of brand.pages) {
+      if (pg.threadId === p.id) continue;
+      const html = await store.readHtml(pg.threadId, pg.versionId);
+      if (html) put(`site/${slug(pg.brief)}/index.html`, html);
+      const shot = await store.readPng(pg.threadId, pg.versionId);
+      if (shot) put(`site/${slug(pg.brief)}/screenshot.png`, shot);
+    }
+  }
+
+  const zip = Buffer.from(zipSync(entries, { level: 6 }));
+  const files: { name: string; data: Buffer }[] = [{ name: `arbiter-${slug(p.brief)}.zip`, data: zip }];
+  if (png) files.push({ name: `${cur!.id}.png`, data: png });
+
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
+  const extraPages = brand ? brand.pages.filter((pg) => pg.threadId !== p.id).length : 0;
   const text =
-    `📦 Handoff for **${p.brief}** — ${n(p.decisions.length, "decision")}, ${n(p.constraints.length, "constraint")}, ${n(p.versions.length, "version")}.\n` +
-    `\`BUILD.md\` is written for a coding agent${stack ? ` targeting **${stack}**` : ""}: drop it and the HTML into Claude Code, Codex or Grok and say "build this". \`${cur?.id ?? "vN"}.html\` runs anywhere as-is.`;
+    `📦 Handoff for **${p.brief}** — ${n(p.decisions.length, "decision")}, ${n(p.constraints.length, "constraint")}, ${n(p.versions.length, "version")}${brand ? `, brand **${brand.name}**${extraPages ? ` with ${n(extraPages, "other page")}` : ""}` : ""}.\n` +
+    `Unzip and hand \`BUILD.md\`${stack ? ` (targeting **${stack}**)` : ""} to Claude Code, Codex or Grok: "build this". \`index.html\` runs anywhere as-is.`;
   return { files, text };
 }

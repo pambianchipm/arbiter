@@ -159,7 +159,7 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
   {
     name: "post_handoff",
     description:
-      "Post the handoff package to the thread: the decision log with provenance, BUILD.md (a brief for a coding agent), and the current version's HTML and screenshot. Call this when someone asks for the handoff, the spec, the deliverable, the files, or the source. Optional stack targets BUILD.md (e.g. 'Next.js + Tailwind').",
+      "Post the handoff package to the thread as a zip: BUILD.md (a brief for a coding agent), the decision log, index.html, the screenshot, and the brand's shared chrome and other pages when there is brand memory. Call this when someone asks for the handoff, the spec, the deliverable, the files, the zip, or the source. Optional stack targets BUILD.md (e.g. 'Next.js + Tailwind').",
     input_schema: {
       type: "object",
       properties: { stack: { type: "string" } },
@@ -468,7 +468,7 @@ async function postHandoff(input: Record<string, unknown>, ctx: ToolContext): Pr
   const p = ctx.project;
   if (!p.versions.length) return fail("Nothing to hand off yet: no version has been published.");
   const stack = input.stack ? String(input.stack).slice(0, 120) : undefined;
-  const { files, text } = await buildHandoffFiles(ctx.store, p, stack);
+  const { files, text } = await buildHandoffFiles(ctx.store, p, stack, ctx.brand);
   await ctx.surface.postFiles(p, files, text);
   pushAgentNote(p, `Posted the handoff package (${files.map((f) => f.name).join(", ")}).`);
   await ctx.store.save(p);

@@ -76,9 +76,10 @@ export class Screenshotter {
         warnings.push(`request failed: ${trunc(u)} (${r.failure()?.errorText ?? "?"})`);
       });
       page.setDefaultTimeout(timeout);
-      // DOM first, then bounded waits for the load event (Tailwind CDN JIT, fonts) and network idle.
-      // A slow or blocked CDN degrades the screenshot; it never fails the render.
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+      // Return as soon as the response commits, then bounded waits for DOM, load (Tailwind CDN JIT,
+      // fonts) and network idle. A slow or blocked CDN degrades the screenshot; it never fails the render.
+      await page.goto(url, { waitUntil: "commit", timeout });
+      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => warnings.push("DOM did not finish parsing within 15s: a <script src> in <head> is hanging (continuing)"));
       await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => warnings.push("load event did not fire within 10s (continuing)"));
       await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => warnings.push("network did not go idle within 5s (continuing)"));
       // Compare pages embed variants in iframes; wait for each frame too (bounded).

@@ -67,7 +67,7 @@ It is deliberately hard to trigger by accident. Utterances are cut on ~0.9s of s
 
 ## Hand off to a coding agent
 
-`/handoff [stack]` (or the 📦 button) posts four files: `handoff-<thread>.md` (the full decision log with timestamps and votes), `BUILD.md` (a prompt-shaped brief for a coding agent: goal, non-negotiables, decisions to preserve, settled disagreements, style tokens, an acceptance checklist, and who to ask), plus the final `vN.html` and `vN.png`. Drop `BUILD.md` and the HTML into Claude Code, Codex or Grok and say "build this". Pass a stack, e.g. `/handoff stack: Next.js + Tailwind + shadcn`, to target it.
+`/handoff [stack]` (or the 📦 button, or asking "post the handoff") posts one zip plus the screenshot. Inside: `README.md`, `BUILD.md` (a prompt-shaped brief for a coding agent: goal, non-negotiables, decisions to preserve, settled disagreements, style tokens, an acceptance checklist, and who to ask), `handoff.md` (the full decision log with timestamps and votes), `index.html`, `screenshot.png`, and when the server has brand memory, `brand/` (brand doc plus `header.html`, `footer.html`, `head.html` to reuse verbatim) and `site/<page>/` for every other approved page. Unzip, open Claude Code, Codex or Grok in that folder, say "build this". Pass a stack, e.g. `/handoff stack: Next.js + Tailwind + shadcn`, to target it.
 
 ## Setup (10 minutes)
 
