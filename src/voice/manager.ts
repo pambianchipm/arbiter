@@ -11,7 +11,7 @@ import {
   type VoiceConnection,
 } from "@discordjs/voice";
 import prism from "prism-media";
-import { PermissionFlagsBits, type Client, type VoiceBasedChannel } from "discord.js";
+import { Events, PermissionFlagsBits, type Client, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { Surface } from "../surface.js";
 import type { SpeechToText } from "./stt.js";
@@ -64,7 +64,21 @@ export class VoiceManager {
     private readonly tts: ElevenLabsTTS | undefined,
     private readonly gate: RelevanceGate | undefined,
     private readonly opts: VoiceOptions,
-  ) {}
+  ) {
+    // Leave on our own when the humans have all gone.
+    client.on(Events.VoiceStateUpdate, (oldState: VoiceState) => void this.onVoiceStateUpdate(oldState));
+  }
+
+  private async onVoiceStateUpdate(oldState: VoiceState): Promise<void> {
+    const left = oldState.channelId;
+    if (!left) return;
+    for (const [projectId, s] of this.sessions) {
+      if (s.channelId !== left) continue;
+      const ch = oldState.guild.channels.cache.get(left);
+      const humans = ch?.isVoiceBased() ? ch.members.filter((m) => !m.user.bot).size : 0;
+      if (humans === 0) await this.leave(projectId, "everyone left the channel");
+    }
+  }
 
   mode(projectId: string): VoiceMode | undefined {
     return this.sessions.get(projectId)?.mode;
@@ -228,6 +242,13 @@ export class VoiceManager {
     const name = member?.displayName ?? this.client.users.cache.get(userId)?.username ?? `user-${userId.slice(-4)}`;
     const p = await this.orch.get(session.projectId);
     if (!p) return;
+
+    // Spoken "Arbiter, leave" / "stop listening" ends the session in any mode.
+    if (/^\W*(?:(?:hey|ok|okay|yo)\s+)?arbiter\W+(?:leave|stop(?: listening)?|go away|bye|sign off)\W*$/i.test(text) || /^\W*stop listening\W*$/i.test(text)) {
+      await this.surface.postText(p, `🎙️ **${name}**: ${text}`).catch(() => undefined);
+      await this.leave(session.projectId, `${name} asked me to`);
+      return;
+    }
 
     // Decide whether this line is for the agent at all.
     let feed = text;
