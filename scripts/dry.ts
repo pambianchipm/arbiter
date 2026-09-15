@@ -50,7 +50,9 @@ async function main(): Promise<void> {
   console.log(`\n╔${bar}╗\n║  📺 Live canvas:  ${url}${" ".repeat(Math.max(0, bar.length - url.length - 19))}║\n║  All sessions:    http://localhost:${port}/live${" ".repeat(Math.max(0, bar.length - `http://localhost:${port}/live`.length - 19))}║\n╚${bar}╝\n`);
   console.log("Kickoff is running. The first render takes ~30–90s; you'll see 📐 v1 when it lands. Type feedback any time, e.g.  sam(designer): more whitespace\n");
   console.log("You are the PM. Type feedback as yourself, or as others:  sam(designer): more whitespace   ·   /help for commands\n");
-  await orch.startProject({ threadId, channelId: "console", brief, referenceUrl, createdBy: { id: "you", name: "You", role: "pm" } });
+  const existing = await store.listBrands("console");
+  if (existing.length) console.log(`🧠 brand memory found: ${existing.map((b) => `${b.name} (${b.pages.length} pages)`).join(", ")} — this page will start from the default brand\n`);
+  await orch.startProject({ threadId, channelId: "console", guildId: "console", brief, referenceUrl, createdBy: { id: "you", name: "You", role: "pm" } });
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (): void => rl.question("> ", (line) => void handle(line.trim()).then(ask));
@@ -76,11 +78,12 @@ async function main(): Promise<void> {
         "  <text>                    feedback from You (pm)",
         "  sam(designer): <text>     feedback from someone else (roles: designer, pm, eng, stakeholder)",
         "  make it feel like https://linear.app     → the agent studies the site and adopts its palette/type",
-        "  /vote <name> a|b · /resolve · /approve <name> · /constraint <name>: <text> · /handoff · /status · /quit",
+        "  /vote <name> a|b · /resolve · /approve <name> · /constraint <name>: <text> · /handoff · /status · /brand · /quit",
       ].join("\n"));
       return;
     }
     if (line === "/status") return console.log(await orch.statusText(threadId));
+    if (line === "/brand") return console.log(await orch.brandStatus("console"));
     if (line === "/handoff") return void (await orch.handoff(threadId));
     if (line === "/resolve") {
       const p = await store.load(threadId);

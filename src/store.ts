@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import type { Project, Role } from "./types.js";
+import type { Brand, Project, Role } from "./types.js";
 
 /**
  * Filesystem-backed store. One folder per project:
@@ -135,6 +135,53 @@ export class Store {
     } catch {
       return undefined;
     }
+  }
+
+  // ---- brands (per guild) ----
+
+  private brandDir(guildId: string): string {
+    return path.join(this.dir, "brands", safe(guildId));
+  }
+
+  async loadBrand(guildId: string, brandId: string): Promise<Brand | undefined> {
+    try {
+      return JSON.parse(await fs.readFile(path.join(this.brandDir(guildId), `${safe(brandId)}.json`), "utf8")) as Brand;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async saveBrand(b: Brand): Promise<void> {
+    b.updatedAt = new Date().toISOString();
+    await fs.mkdir(this.brandDir(b.guildId), { recursive: true });
+    await atomicWrite(path.join(this.brandDir(b.guildId), `${safe(b.id)}.json`), JSON.stringify(b, null, 2));
+  }
+
+  async listBrands(guildId: string): Promise<Brand[]> {
+    try {
+      const names = (await fs.readdir(this.brandDir(guildId))).filter((f) => f.endsWith(".json") && f !== "_index.json");
+      const out: Brand[] = [];
+      for (const f of names) {
+        const b = await this.loadBrand(guildId, f.replace(/\.json$/, ""));
+        if (b) out.push(b);
+      }
+      return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    } catch {
+      return [];
+    }
+  }
+
+  async getDefaultBrandId(guildId: string): Promise<string | undefined> {
+    try {
+      return (JSON.parse(await fs.readFile(path.join(this.brandDir(guildId), "_index.json"), "utf8")) as { lastBrandId?: string }).lastBrandId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async setDefaultBrandId(guildId: string, brandId: string): Promise<void> {
+    await fs.mkdir(this.brandDir(guildId), { recursive: true });
+    await atomicWrite(path.join(this.brandDir(guildId), "_index.json"), JSON.stringify({ lastBrandId: brandId }, null, 2));
   }
 
   // ---- roles (per guild) ----

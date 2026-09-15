@@ -3,7 +3,8 @@ import type { Screenshotter } from "./render/screenshot.js";
 import type { Surface } from "./surface.js";
 import type { Agent } from "./agent/run.js";
 import type { ToolContext } from "./agent/tools.js";
-import type { Fork, ImageInput, Participant, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
+import type { Brand, Fork, ImageInput, Participant, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
+import { absorbShippedPage, brandSummary, newBrand, slugify } from "./brand.js";
 import { currentVersion, nowIso, shortId } from "./types.js";
 import { buildHandoffFiles } from "./handoff.js";
 import { log, errMsg } from "./log.js";
@@ -93,11 +94,15 @@ export class Orchestrator {
     referenceUrl?: string;
     createdBy: { id: string; name: string; role?: Role };
     images?: ImageInput[];
+    /** brand name or id; defaults to the server's last-used brand, or a new "Default" brand */
+    brand?: string;
   }): Promise<Project> {
     const role = args.createdBy.role ?? (args.guildId ? (await this.store.getRoles(args.guildId))[args.createdBy.id] : undefined);
     const creator: Participant = { id: args.createdBy.id, name: args.createdBy.name, role };
+    const brand = args.guildId ? await this.resolveBrand(args.guildId, args.brand) : undefined;
     const p: Project = {
       id: args.threadId,
+      brandId: brand?.id,
       threadId: args.threadId,
       channelId: args.channelId,
       guildId: args.guildId,
@@ -129,9 +134,10 @@ export class Orchestrator {
     };
     await this.store.save(p);
     if (args.images?.length) this.pendingImages.set(p.id, [...args.images]);
+    const onBrand = brand && (brand.pages.length || brand.chrome || brand.style) ? ` On the **${brand.name}** brand: ${brand.pages.length} page${brand.pages.length === 1 ? "" : "s"} so far${brand.chrome ? ", reusing its header and footer" : ""}.` : "";
     await this.surface.postText(
       p,
-      `On it. Building v1 from the brief${args.images?.length ? " and your sketch" : ""}. First render usually lands in under a minute.\n📺 Live canvas (screen-share this): ${this.liveUrl(p)}`,
+      `On it. Building v1 from the brief${args.images?.length ? " and your sketch" : ""}.${onBrand} First render usually lands in under a minute.\n📺 Live canvas (screen-share this): ${this.liveUrl(p)}`,
     );
     void this.trigger(p.id, { kind: "kickoff" });
     return p;
@@ -205,6 +211,7 @@ export class Orchestrator {
     this.pendingImages.delete(projectId);
     const cur = currentVersion(p);
     const currentHtml = cur ? await this.store.readHtml(p.id, cur.id) : undefined;
+    const brand = await this.brandFor(p);
 
     const result: TurnResult = { text: "", toolCalls: 0, iterations: 0, publishedVersionIds: [] };
     const ctx: ToolContext = {
@@ -215,6 +222,7 @@ export class Orchestrator {
       baseUrl: this.cfg.baseUrl,
       result,
       renderRetries: 0,
+      brand,
       onVersionPublished: (v) => this.scheduleNudge(p.id, v),
       onForkOpened: (f) => this.scheduleForkTimeout(p.id, f),
     };
@@ -228,7 +236,7 @@ export class Orchestrator {
     const transcriptBefore = p.transcript.length;
     const t0 = Date.now();
     try {
-      await this.agent.runTurn({ project: p, reason, images, currentHtml }, ctx);
+      await this.agent.runTurn({ project: p, reason, images, currentHtml, brand }, ctx);
     } catch (e) {
       result.error = errMsg(e);
     } finally {
@@ -255,6 +263,54 @@ export class Orchestrator {
     }
     log.info(`turn done ${p.id} reason=${reason.kind} tools=${result.toolCalls} iters=${result.iterations} ${Date.now() - t0}ms${result.error ? " error=" + result.error : ""}`);
     return result;
+  }
+
+  // ---------------------------------------------------------------- brand memory
+
+  /** Explicit name/id → that brand (created if new). Otherwise the server's last-used brand, else a new "Default". */
+  async resolveBrand(guildId: string, nameOrId?: string): Promise<Brand> {
+    let id = nameOrId ? slugify(nameOrId) : await this.store.getDefaultBrandId(guildId);
+    let b = id ? await this.store.loadBrand(guildId, id) : undefined;
+    if (!b) {
+      b = newBrand(guildId, nameOrId ?? "Default");
+      id = b.id;
+      await this.store.saveBrand(b);
+    }
+    await this.store.setDefaultBrandId(guildId, b.id);
+    return b;
+  }
+
+  async brandFor(p: Project): Promise<Brand | undefined> {
+    if (!p.guildId || !p.brandId) return undefined;
+    return this.store.loadBrand(p.guildId, p.brandId);
+  }
+
+  async brandStatus(guildId: string, nameOrId?: string): Promise<string> {
+    const id = nameOrId ? slugify(nameOrId) : await this.store.getDefaultBrandId(guildId);
+    const b = id ? await this.store.loadBrand(guildId, id) : undefined;
+    if (!b) {
+      const all = await this.store.listBrands(guildId);
+      return all.length ? `No brand called "${nameOrId}". Brands here: ${all.map((x) => x.name).join(", ")}.` : "No brand memory on this server yet. It starts the first time a page is approved by everyone.";
+    }
+    return brandSummary(b);
+  }
+
+  async useBrand(guildId: string, name: string): Promise<Brand> {
+    return this.resolveBrand(guildId, name);
+  }
+
+  async listBrands(guildId: string): Promise<Brand[]> {
+    return this.store.listBrands(guildId);
+  }
+
+  private async absorbIntoBrand(p: Project, v: Version): Promise<Brand | undefined> {
+    const b = await this.brandFor(p);
+    if (!b) return undefined;
+    const html = await this.store.readHtml(p.id, v.id);
+    if (!html) return undefined;
+    absorbShippedPage(b, p, v, html);
+    await this.store.saveBrand(b);
+    return b;
   }
 
   // ---------------------------------------------------------------- votes
@@ -318,7 +374,11 @@ export class Orchestrator {
     p.transcript.push({ id: shortId("t_"), at: nowIso(), kind: "system", name: "system", text: `${name} approved ${versionId}${allApproved ? " — everyone has approved" : ""}.`, seen: true });
     await this.store.save(p);
     this.cancelNudge(p.id);
-    if (allApproved) await this.surface.postText(p, `✅ ${versionId} approved by everyone (${v.approvals.length}/${total}). Run /handoff for the spec and source.`);
+    if (allApproved) {
+      const b = await this.absorbIntoBrand(p, v);
+      const learned = b ? ` 🧠 Brand memory for **${b.name}** updated: header/footer and tokens from ${versionId}; ${b.pages.length} page${b.pages.length === 1 ? "" : "s"} in the site. The next /design starts from it.` : "";
+      await this.surface.postText(p, `✅ ${versionId} approved by everyone (${v.approvals.length}/${total}). Run /handoff for the spec and source.${learned}`);
+    }
     return { ok: true, allApproved, count: v.approvals.length, total };
   }
 

@@ -7,7 +7,8 @@ export const commands = [
     .setDescription("Start a design session in a new thread: Arbiter builds v1 and iterates with the team")
     .addStringOption((o) => o.setName("brief").setDescription("What are we building? e.g. 'landing page for a coffee subscription'").setRequired(true).setMaxLength(600))
     .addAttachmentOption((o) => o.setName("sketch").setDescription("Whiteboard photo or napkin sketch — used as the layout spec"))
-    .addStringOption((o) => o.setName("reference").setDescription("A site to take the feel from, e.g. https://linear.app")),
+    .addStringOption((o) => o.setName("reference").setDescription("A site to take the feel from, e.g. https://linear.app"))
+    .addStringOption((o) => o.setName("brand").setDescription("Which brand memory to design on (default: this server's last-used brand)").setAutocomplete(true)),
   new SlashCommandBuilder()
     .setName("role")
     .setDescription("Tell Arbiter your role so it can route questions and break ties")
@@ -27,6 +28,12 @@ export const commands = [
     .setDescription("Post the handoff: decision log, constraints, final source, and BUILD.md for a coding agent")
     .addStringOption((o) => o.setName("stack").setDescription("Target stack for BUILD.md, e.g. 'Next.js + Tailwind + shadcn'").setMaxLength(120)),
   new SlashCommandBuilder().setName("status").setDescription("Where this design session stands"),
+  new SlashCommandBuilder()
+    .setName("brand")
+    .setDescription("This server's brand memory: tokens, shared header/footer, rules, and the site map")
+    .addSubcommand((sc) => sc.setName("show").setDescription("Show the current brand and its pages").addStringOption((o) => o.setName("name").setDescription("A specific brand").setAutocomplete(true)))
+    .addSubcommand((sc) => sc.setName("new").setDescription("Start a new, empty brand and make it the default").addStringOption((o) => o.setName("name").setDescription("Brand name").setRequired(true).setMaxLength(60)))
+    .addSubcommand((sc) => sc.setName("use").setDescription("Switch the default brand for new /design sessions").addStringOption((o) => o.setName("name").setDescription("Brand name").setRequired(true).setAutocomplete(true))),
   new SlashCommandBuilder()
     .setName("voice")
     .setDescription("Let Arbiter listen in your voice channel and iterate on what the team says")

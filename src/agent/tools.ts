@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { Store } from "../store.js";
 import type { Screenshotter } from "../render/screenshot.js";
 import type { Surface } from "../surface.js";
-import type { Fork, Project, Question, Role, TurnResult, Version } from "../types.js";
+import type { Brand, Fork, Project, Question, Role, TurnResult, Version } from "../types.js";
 import { nextVersionNumber, nowIso, shortId, ROLES } from "../types.js";
 import { log, errMsg } from "../log.js";
 import { buildHandoffFiles } from "../handoff.js";
@@ -15,6 +15,7 @@ export interface ToolContext {
   baseUrl: string;
   result: TurnResult;
   renderRetries: number;
+  brand?: Brand;
   onVersionPublished?: (v: Version) => void;
   onForkOpened?: (f: Fork) => void;
 }
@@ -141,6 +142,21 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = [
     },
   },
   {
+    name: "remember_for_brand",
+    description:
+      "Record something that should hold on EVERY page of this brand, not just this one: a rule ('primary CTA is always rust'), a voice note ('never say cheap, say honest'), or a cross-page decision. Stored in the server's brand memory with provenance.",
+    input_schema: {
+      type: "object",
+      properties: {
+        summary: { type: "string" },
+        requested_by: { type: "array", items: { type: "string" } },
+        rationale: { type: "string" },
+        voice: { type: "string", description: "Optional: replace the brand's copy/voice guideline with this sentence." },
+      },
+      required: ["summary", "requested_by", "rationale"],
+    },
+  },
+  {
     name: "post_handoff",
     description:
       "Post the handoff package to the thread: the decision log with provenance, BUILD.md (a brief for a coding agent), and the current version's HTML and screenshot. Call this when someone asks for the handoff, the spec, the deliverable, the files, or the source. Optional stack targets BUILD.md (e.g. 'Next.js + Tailwind').",
@@ -182,6 +198,8 @@ export async function executeTool(name: string, rawInput: unknown, ctx: ToolCont
         return await say(input, ctx);
       case "post_handoff":
         return await postHandoff(input, ctx);
+      case "remember_for_brand":
+        return await rememberForBrand(input, ctx);
       default:
         return fail(`Unknown tool ${name}`);
     }
@@ -419,6 +437,24 @@ async function say(input: Record<string, unknown>, ctx: ToolContext): Promise<To
   pushAgentNote(ctx.project, text);
   await ctx.store.save(ctx.project);
   return ok({ posted: true });
+}
+
+async function rememberForBrand(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {
+  const b = ctx.brand;
+  if (!b) return fail("This thread has no brand memory (no server). Use log_decision for page-level decisions.");
+  b.decisions.push({
+    id: shortId("d_"),
+    at: nowIso(),
+    summary: String(input.summary ?? "").slice(0, 400),
+    rationale: String(input.rationale ?? "").slice(0, 600),
+    requestedBy: toStrArr(input.requested_by),
+    versionId: ctx.project.currentVersionId,
+  });
+  if (input.voice) b.voice = String(input.voice).slice(0, 400);
+  await ctx.store.saveBrand(b);
+  pushAgentNote(ctx.project, `Remembered for the ${b.name} brand: ${String(input.summary ?? "")}`);
+  await ctx.store.save(ctx.project);
+  return ok({ brandRules: b.decisions.length });
 }
 
 async function postHandoff(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {

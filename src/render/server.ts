@@ -30,6 +30,17 @@ export function createPreviewServer(store: Store): express.Express {
     res.type("html").send(comparePage(project, a, b));
   });
 
+  // Stable link to whatever the current version of a thread is (used for cross-page nav links).
+  app.get("/p/:project/current", async (req, res) => {
+    const { project } = req.params as Record<string, string>;
+    const p = await store.load(project);
+    if (!p?.currentVersionId) {
+      res.status(404).type("text/plain").send("no version yet");
+      return;
+    }
+    res.redirect(302, `/p/${encodeURIComponent(project)}/${p.currentVersionId}`);
+  });
+
   app.get("/p/:project/:version", async (req, res) => {
     const { project, version } = req.params as Record<string, string>;
     const html = await store.readHtml(project, version);

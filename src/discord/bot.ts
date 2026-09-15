@@ -9,6 +9,7 @@ import {
   Partials,
   ThreadAutoArchiveDuration,
   type Attachment,
+  type AutocompleteInteraction,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
@@ -149,9 +150,22 @@ async function onMessage(client: Client, orch: Orchestrator, m: Message): Promis
 }
 
 async function onInteraction(orch: Orchestrator, i: Interaction, voice?: VoiceManager): Promise<void> {
+  if (i.isAutocomplete()) return onAutocomplete(orch, i);
   if (i.isChatInputCommand()) return onCommand(orch, i, voice);
   if (i.isButton()) return onButton(orch, i);
   if (i.isModalSubmit()) return onModal(orch, i);
+}
+
+async function onAutocomplete(orch: Orchestrator, i: AutocompleteInteraction): Promise<void> {
+  if (!i.guildId) return i.respond([]);
+  const typed = i.options.getFocused().toLowerCase();
+  const brands = await orch.listBrands(i.guildId);
+  await i.respond(
+    brands
+      .filter((b) => b.name.toLowerCase().includes(typed))
+      .slice(0, 25)
+      .map((b) => ({ name: `${b.name} (${b.pages.length} page${b.pages.length === 1 ? "" : "s"})`, value: b.id })),
+  );
 }
 
 async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voice?: VoiceManager): Promise<void> {
@@ -163,6 +177,7 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       const brief = i.options.getString("brief", true);
       const sketch = i.options.getAttachment("sketch");
       const reference = i.options.getString("reference") ?? undefined;
+      const brand = i.options.getString("brand") ?? undefined;
       const ch = i.channel;
       if (!ch || ch.type !== ChannelType.GuildText) {
         await i.reply({ content: "Run `/design` in a regular text channel; I'll open a thread for the session.", flags: MessageFlags.Ephemeral });
@@ -185,6 +200,7 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
         referenceUrl: reference,
         createdBy: { id: i.user.id, name, role: inferRole(i.member) },
         images,
+        brand,
       });
       await i.editReply(`Started ${thread.toString()} — **${brief}**${sketch ? " (with sketch)" : ""}${reference ? ` · reference ${reference}` : ""}`);
       return;
@@ -222,6 +238,20 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       }
       const text = (await orch.statusText(inProject)) ?? "No project here.";
       await i.reply({ content: text, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    case "brand": {
+      if (!i.guildId) {
+        await i.reply({ content: "Brand memory lives on a server.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const sub = i.options.getSubcommand();
+      if (sub === "show") {
+        await i.reply({ content: await orch.brandStatus(i.guildId, i.options.getString("name") ?? undefined) });
+        return;
+      }
+      const b = await orch.useBrand(i.guildId, i.options.getString("name", true));
+      await i.reply({ content: sub === "new" ? `🧠 Brand **${b.name}** is ready and is now the default for new sessions.` : `🧠 Default brand is now **${b.name}** (${b.pages.length} page${b.pages.length === 1 ? "" : "s"}).` });
       return;
     }
     case "voice": {

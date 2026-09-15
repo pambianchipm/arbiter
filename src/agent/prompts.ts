@@ -31,6 +31,9 @@ Single-file HTML prototypes, published with the publish_version tool. The team s
 ## What the humans can click
 Every version you post carries buttons: ✅ Approve, ✏️ Feedback (opens a form), 📦 Handoff. Forks carry 🅰 / 🅱 vote buttons and ⚖️ Resolve. Slash commands: /role (tell you their role), /constraint (hard rule), /status, /handoff [stack]. When everyone has approved the current version the session is marked shipped and the system points them to /handoff. You may point people at these controls by name.
 
+## Brand memory
+If a "Brand" section is present, this server already has a design system the team approved on earlier pages. On a new page: reuse the shared <head> extras, <header> and <footer> verbatim (same classes, same copy), add a nav link for the new page, follow the tokens and voice, and honour brand rules and constraints. Link to existing pages with the URLs listed. When the team states something that should hold for every page (a rule, a voice note, "the CTA is always rust"), record it with remember_for_brand.
+
 ## Kickoff (first turn)
 Build v1 from the brief. If a sketch or whiteboard photo is attached, it is the layout spec: follow its structure and section order literally, and say so. If a reference URL is given, call study_reference first, then set_style with what you observed, then build. After v1, ask the designer one visual question and the pm one content question.
 
@@ -68,6 +71,27 @@ export function buildTurnContent(input: TurnInput): Anthropic.Beta.BetaContentBl
   if (p.referenceUrl) lines.push(`Reference URL: ${p.referenceUrl}`);
   lines.push(`Status: ${p.status}. Turn ${p.turnCount + 1}.`);
   lines.push(`Participants: ${participantsLine(p)}`);
+
+  if (input.brand && (input.brand.pages.length || input.brand.chrome || input.brand.style || input.brand.decisions.length || input.brand.voice)) {
+    const b = input.brand;
+    lines.push(`\n## Brand: ${b.name} (server memory, reuse it)`);
+    if (b.style) {
+      lines.push(`Tokens: ${b.style.summary}${b.style.palette?.length ? ` Palette ${b.style.palette.join(", ")}.` : ""}${b.style.typography ? ` Type: ${b.style.typography}.` : ""}${b.style.spacing ? ` Spacing: ${b.style.spacing}.` : ""}`);
+    }
+    if (b.voice) lines.push(`Voice: ${b.voice}`);
+    if (b.pages.length) {
+      lines.push(`Existing pages (link to them from the nav):`);
+      for (const pg of b.pages) lines.push(`- ${pg.brief} → ${pg.previewUrl}${pg.threadId === p.id ? " (this thread)" : ""}`);
+    }
+    if (b.constraints.length) lines.push(`Brand constraints: ${b.constraints.map((c) => c.text).join("; ")}`);
+    if (b.decisions.length) lines.push(`Brand rules: ${b.decisions.map((d) => `${d.summary} (${d.requestedBy.join(", ") || "team"})`).join("; ")}`);
+    if (b.chrome && b.chrome.fromThread !== p.id) {
+      lines.push(`Shared chrome from ${b.chrome.fromVersion}; reuse verbatim:`);
+      if (b.chrome.head) lines.push(`<!-- head extras -->\n${b.chrome.head}`);
+      if (b.chrome.header) lines.push(`<!-- header -->\n${b.chrome.header}`);
+      if (b.chrome.footer) lines.push(`<!-- footer -->\n${b.chrome.footer}`);
+    }
+  }
 
   lines.push(`\n## Constraints (hard)`);
   lines.push(p.constraints.length ? p.constraints.map((c) => `- ${c.text} (from ${c.source})`).join("\n") : "- none yet");

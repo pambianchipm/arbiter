@@ -94,8 +94,26 @@ export interface StyleNotes {
   vibe?: string;
 }
 
+/** Persists across threads: the team's design system as the agent has learned it. One per server by default, more by name. */
+export interface Brand {
+  id: string; // slug, unique within the guild
+  guildId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  style?: StyleNotes;
+  /** header/footer/head HTML lifted from the last approved page, reused verbatim on new pages */
+  chrome?: { header?: string; footer?: string; head?: string; fromThread: string; fromVersion: string; at: string };
+  voice?: string;
+  constraints: Constraint[];
+  decisions: Decision[];
+  pages: { threadId: string; brief: string; versionId: string; previewUrl: string; shippedAt: string }[];
+  people: Record<string, { name: string; role?: Role }>;
+}
+
 export interface Project {
   id: string; // == threadId
+  brandId?: string;
   guildId?: string;
   channelId: string;
   threadId: string;
@@ -135,6 +153,8 @@ export interface TurnInput {
   images: ImageInput[];
   /** HTML of the current version, if any (the model edits from this) */
   currentHtml?: string;
+  /** the server's brand memory, if this project is bound to one */
+  brand?: Brand;
 }
 
 export interface TurnResult {

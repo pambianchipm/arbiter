@@ -24,6 +24,9 @@ A design agent that lives in the team's Discord thread and does the thing a chat
 5. **Constraint (2:15)** Eng: "we don't have a carousel component." v3 posts with the winner and the constraint logged; Arbiter explains what it swapped.
 6. **Handoff (2:40)** `/handoff` → markdown spec with decisions, who asked, why, how the vote went, plus the HTML. Everyone taps ✅ → "shipped".
 
+## Second-page beat
+After the landing page ships: `/design pricing page`. v1 arrives with the same header and footer, the palette, and a nav link back to the landing page, without anyone restating the brand. `/brand show` displays what the agent learned. Line for judges: the server is the memory; every thread starts where the last one ended.
+
 ## Voice beat (if the room has a voice channel)
 `/voice join` in the thread. Talk. Each sentence lands in the thread as `🎙️ Name: …` and the canvas changes; Arbiter asks its question out loud. Attribution is per speaker because Discord streams each voice separately: this is the "environment makes the agent better" line in its purest form.
 

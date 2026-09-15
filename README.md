@@ -48,6 +48,15 @@ Every session posts a link like `http://localhost:3939/live/<thread>`. It's one 
 
 For a voice/video session: hop in a Discord voice channel, and whoever runs the bot screen-shares that tab. Feedback goes in the thread (or, next step, by voice); the shared screen changes live. No public URL needed for this, since the screen-sharer's own localhost is what everyone sees.
 
+## Brand memory: the second page is on-brand before anyone speaks
+
+Each server has a brand (more by name with `/brand new`). When a page is approved by everyone, Arbiter lifts its `<head>` extras, `<header>` and `<footer>` into the brand along with the style tokens, constraints, and who's who, and adds the page to the site map. The next `/design` on that server starts from the brand: same chrome verbatim, a nav link added for the new page, links to the existing pages, brand rules honoured. Anything the team says should hold on every page ("the CTA is always rust") the agent records with `remember_for_brand`.
+
+- `/brand show` — tokens, shared chrome, rules, people, and the site map with stable links.
+- `/brand new <name>` · `/brand use <name>` — several products on one server.
+- `/design … brand:<name>` — pick a brand for a session; otherwise the last-used one.
+- `/p/<thread>/current` always serves a thread's latest version, so cross-page nav links don't go stale.
+
 ## Voice: talk to it in a voice channel
 
 Join a voice channel, then in the design thread run `/voice join`. Arbiter joins, and from then on every utterance in that channel is transcribed and posted into the thread as `🎙️ Name: …`, attributed to whoever said it (Discord gives the bot a separate audio stream per speaker, so attribution is free), and handled exactly like a typed message: same batching, same conflict detection, same votes. Its questions and closing lines are spoken back. Keep the live canvas on a shared screen and it's a design review with the agent in the room.
@@ -99,6 +108,7 @@ Nobody points Arbiter at a GitHub repo or a laptop. It is a bot process plus a s
 | `/constraint <text>` | Hard constraint every future version must respect. |
 | `/status` · `/handoff [stack]` | Where things stand · post the spec, BUILD.md and source. |
 | `/voice join` · `/voice leave` | Listen in your voice channel; every utterance becomes attributed feedback. |
+| `/brand show` · `/brand new` · `/brand use` | The server's design memory and site map. |
 | Any message in the thread | Feedback. Attach an annotated screenshot if you like. |
 | ✅ Approve · ✏️ Feedback · 📦 Handoff | Buttons on every version. Everyone approving = shipped. |
 | 🅰 🅱 ⚖️ | Vote on a fork, or resolve with the votes in so far. |
@@ -140,5 +150,6 @@ src/
   render/screenshot.ts shared headless Chromium, error capture, bounded waits
   store.ts             atomic JSON + files per project
   handoff.ts           deterministic spec generator
+  brand.ts             chrome extraction, absorbing shipped pages into brand memory
 scripts/               smoke test, dry-run REPL, console surface
 ```

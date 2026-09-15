@@ -230,6 +230,32 @@ async function main(): Promise<void> {
   });
   assert(sseGot, "SSE pushes a change event when state is saved");
 
+  // ---- Brand memory: shipping absorbed chrome + tokens; the next project on this server starts from it
+  console.log("\n▶ brand memory");
+  const brand = await store.loadBrand("guild", "default");
+  assert(brand && brand.pages.length === 1 && brand.pages[0].threadId === threadId, "shipping created the server's default brand with one page");
+  assert(brand!.chrome?.header?.startsWith("<header") && brand!.chrome?.footer?.startsWith("<footer") && brand!.chrome?.head?.includes("tailwindcss"), "header/footer/head extras lifted from the approved page");
+  assert(brand!.constraints.length === 1 && brand!.people["u_sam"]?.role === "designer", "constraints and people folded into the brand");
+  assert(brand!.pages[0].previewUrl.endsWith("/current"), "site map uses stable /current links");
+  const cur = await fetch(`${baseUrl}/p/${threadId}/current`, { redirect: "manual" });
+  assert(cur.status === 302 && (cur.headers.get("location") ?? "").endsWith("/v3"), "/current redirects to the current version");
+  fake.push(
+    msg([toolUse("remember_for_brand", { summary: "Primary CTA is always amber", requested_by: ["Priya"], rationale: "Brand consistency across pages", voice: "Warm, specific, no hype." }), toolUse("publish_version", { html: HTML_V1.replace("Ember", "Ember pricing"), summary: "Pricing page on the Ember brand", changes: [], addresses: ["Priya"] })], "tool_use"),
+    msg([text("Pricing page is up, on-brand.")], "end_turn"),
+  );
+  const t2id = "thread_smoke_pricing";
+  await orch.startProject({ threadId: t2id, channelId: "chan", guildId: "guild", brief: "pricing page", createdBy: { id: "u_priya", name: "Priya", role: "pm" } });
+  await waitFor("pricing kickoff", async () => (await store.load(t2id))?.turnCount === 1);
+  const p2 = (await store.load(t2id))!;
+  assert(p2.brandId === "default", "second project bound to the server's default brand");
+  const kick = fake.calls[fake.calls.length - 2].messages[0].content;
+  const kickText = typeof kick === "string" ? kick : kick.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+  assert(kickText.includes("## Brand: Default") && kickText.includes("<!-- header -->") && kickText.includes("<header") && kickText.includes(`/p/${threadId}/current`), "kickoff prompt carries brand chrome and links to existing pages");
+  assert(kickText.includes("No carousel component exists"), "brand constraints reach the new page");
+  const brand2 = await store.loadBrand("guild", "default");
+  assert(brand2!.decisions.length === 1 && brand2!.voice === "Warm, specific, no hype.", "remember_for_brand persisted a rule and the voice");
+  assert(surface.log.some((l) => l.includes("On the **Default** brand")), "kickoff message says it's building on the brand");
+
   // ---- Restart survives: fresh store loads state from disk
   const store2 = new Store(dataDir);
   const reloaded = await store2.load(threadId);
