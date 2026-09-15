@@ -121,6 +121,10 @@ async function main(): Promise<void> {
   assert(png1 && png1.length > 10_000, `v1 screenshot rendered (${png1?.length} bytes)`);
   const direct = await shots.shoot(`${baseUrl}/p/${threadId}/v1`);
   assert(direct.title === "Ember — coffee, delivered", `screenshot captured the served page (title "${direct.title}")`);
+  assert(!direct.warnings.some((w) => w.includes("horizontal overflow")), "fixture page has no sideways scroll");
+  await store.writeHtml(threadId, "wide", HTML_V1.replace("<main", '<div style="width:3000px;height:10px"></div><main'));
+  const wide = await shots.shoot(`${baseUrl}/p/${threadId}/wide`);
+  assert(wide.warnings.some((w) => w.startsWith("horizontal overflow at 1280px")) && wide.warnings.some((w) => w.includes("on mobile")), "renderer detects sideways scroll at desktop and phone widths");
   const tailwindLoaded = await (async () => {
     const r = await fetch(`${baseUrl}/p/${threadId}/v1`);
     return r.ok;

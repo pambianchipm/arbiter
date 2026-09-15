@@ -260,6 +260,13 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
     ctx.renderRetries++;
     return fail(`${id} rendered but threw JavaScript errors: ${pageErrors.join("; ")}. Fix them and call publish_version again (the broken version was NOT posted).`);
   }
+  const overflow = shot.warnings.find((w) => w.startsWith("horizontal overflow at"));
+  if (overflow && ctx.renderRetries < 1) {
+    ctx.renderRetries++;
+    return fail(
+      `${id} scrolls sideways: ${overflow}. Something is wider than the viewport (a decorative blob, a fixed pixel width, a grid that doesn't collapse). Put decorative elements inside a relative parent with overflow-hidden, drop fixed widths, and call publish_version again (the broken version was NOT posted).`,
+    );
+  }
 
   await ctx.store.writePng(p.id, id, shot.png);
   const version: Version = {
@@ -317,7 +324,7 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   const compareLocal = `${localBase(ctx)}/p/${p.id}/compare/${idA}/${idB}`;
   let shot;
   try {
-    shot = await ctx.shots.shoot(compareLocal, { width: 2600, height: 900, scale: 1 });
+    shot = await ctx.shots.shoot(compareLocal, { width: 2600, height: 900, scale: 1, checkMobile: false });
   } catch (e) {
     return fail(`Render failed for the comparison: ${errMsg(e)}. Check both HTML documents and call fork_variants again.`);
   }

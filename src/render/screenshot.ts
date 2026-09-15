@@ -48,7 +48,7 @@ export class Screenshotter {
 
   async shoot(
     url: string,
-    opts: { width?: number; height?: number; scale?: number; fullPage?: boolean; timeoutMs?: number } = {},
+    opts: { width?: number; height?: number; scale?: number; fullPage?: boolean; timeoutMs?: number; checkMobile?: boolean } = {},
   ): Promise<ShotResult> {
     const t0 = Date.now();
     const width = opts.width ?? 1280;
@@ -92,6 +92,16 @@ export class Screenshotter {
       await page.waitForTimeout(250);
       const png = await page.screenshot({ type: "png", fullPage: opts.fullPage ?? false });
       const title = await page.title().catch(() => "");
+      // Horizontal overflow is the most common "looked fine in the screenshot, broken in the browser" bug.
+      const overflow = async () => page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth })).catch(() => undefined);
+      const d = await overflow();
+      if (d && d.sw > d.iw + 1) warnings.push(`horizontal overflow at ${d.iw}px: page is ${d.sw}px wide (scrolls sideways)`);
+      if (opts.checkMobile ?? true) {
+        await page.setViewportSize({ width: 390, height: 844 }).catch(() => undefined);
+        await page.waitForTimeout(120);
+        const m = await overflow();
+        if (m && m.sw > m.iw + 1) warnings.push(`horizontal overflow on mobile (390px): page is ${m.sw}px wide`);
+      }
       return { png: Buffer.from(png), title, warnings, ms: Date.now() - t0 };
     } finally {
       await context.close().catch(() => undefined);
@@ -101,7 +111,7 @@ export class Screenshotter {
   /** Screenshot an arbitrary external site (reference study). Smaller scale, capped wait. */
   async shootExternal(url: string): Promise<ShotResult> {
     try {
-      return await this.shoot(url, { width: 1280, height: 900, scale: 1, timeoutMs: 25_000 });
+      return await this.shoot(url, { width: 1280, height: 900, scale: 1, timeoutMs: 25_000, checkMobile: false });
     } catch (e) {
       log.warn("external screenshot failed", url, errMsg(e));
       throw e;

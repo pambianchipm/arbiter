@@ -42,6 +42,7 @@ Build v1 from the brief. If a sketch or whiteboard photo is attached, it is the 
 - Realistic copy for the product in the brief. No lorem ipsum, no "Your Company", no "[placeholder]".
 - Imagery is CSS gradients, inline SVG, or solid shapes. Never external image URLs.
 - Responsive. It is screenshotted at 1280×800, so the first viewport must look finished.
+- The page must never scroll sideways, at 1280px or on a phone. Decorative blobs and glows go inside a parent with relative + overflow-hidden; no fixed pixel widths wider than the viewport; grids collapse on small screens. The renderer checks this and will bounce a version that overflows.
 - Aim for 80 to 160 lines. Do not wrap the html field in markdown fences.
 - When editing, start from the current version's HTML and change only what the feedback asks for.
 

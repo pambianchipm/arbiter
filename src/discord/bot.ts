@@ -270,11 +270,28 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       }
       // Always fetch fresh: the cached member may predate the voice state.
       const member = await i.guild?.members.fetch({ user: i.user.id, force: true }).catch(() => (i.member instanceof GuildMember ? i.member : undefined));
-      const ch = member?.voice.channel ?? i.guild?.voiceStates.cache.get(i.user.id)?.channel ?? undefined;
-      if (!ch) {
-        await i.reply({ content: "I can't see you in a voice channel. Join one (in this server) and run `/voice join` again. If you are in one, the bot needs View Channel on it.", flags: MessageFlags.Ephemeral });
+      const vs = i.guild?.voiceStates.cache.get(i.user.id);
+      const channelId = member?.voice.channelId ?? vs?.channelId ?? undefined;
+      log.info(
+        `/voice join by ${name}: guild=${i.guildId} voiceStatesCached=${i.guild?.voiceStates.cache.size ?? "?"} member.voice.channelId=${member?.voice.channelId ?? "null"} state.channelId=${vs?.channelId ?? "null"}`,
+      );
+      if (!channelId) {
+        await i.reply({
+          content:
+            "I can't see you in a voice channel on this server. If you definitely are in one: stop the bot and start it again (`Ctrl+C`, `npm run dev`) so it logs in with the voice-state intent, then retry.",
+          flags: MessageFlags.Ephemeral,
+        });
         return;
       }
+      const chAny = member?.voice.channel ?? (await i.guild?.channels.fetch(channelId).catch(() => null));
+      if (!chAny || !chAny.isVoiceBased()) {
+        await i.reply({
+          content: `You're in a voice channel I can't see (id ${channelId}). Give the Arbiter role **View Channel** and **Connect** on that channel (channel settings → Permissions), then retry.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      const ch = chAny;
       await i.deferReply();
       try {
         await i.editReply(await voice.join(inProject, ch));
