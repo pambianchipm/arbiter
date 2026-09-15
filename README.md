@@ -148,6 +148,8 @@ src/
   voice/stt.ts         ElevenLabs Scribe / OpenAI Whisper
   voice/tts.ts         ElevenLabs streaming TTS
   voice/audio.ts       48k stereo PCM → 16k mono WAV, hallucination filter
+  voice/gate.ts        energy gate, address-mode name match, Haiku relevance check
+CLAUDE.md              operating manual for Claude working in this repo · docs/BRIEFING.md the handoff narrative
   render/server.ts     Express preview + A|B compare page
   render/screenshot.ts shared headless Chromium, error capture, bounded waits
   store.ts             atomic JSON + files per project
