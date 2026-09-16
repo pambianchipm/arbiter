@@ -21,8 +21,11 @@ async function main(): Promise<void> {
   const store = new Store(config.dataDir);
   await store.init();
 
-  const server = await listen(createPreviewServer(store), config.server.port);
-  const shots = new Screenshotter(config.server.chromiumPath);
+  const server = await listen(
+    createPreviewServer(store, { tokens: config.product.previewTokens, adminToken: config.product.adminToken || undefined, legalDir: "docs/legal" }),
+    config.server.port,
+  );
+  const shots = new Screenshotter(config.server.chromiumPath, config.product.maxConcurrentRenders);
 
   const anthropic = new Anthropic();
   const agent = new Agent(anthropic, {
@@ -39,9 +42,18 @@ async function main(): Promise<void> {
     baseUrl: baseUrl(),
     debounceMs: config.debounceMs,
     voiceDebounceMs: config.voice.debounceMs,
+    product: {
+      metering: config.product.metering,
+      freeRenders: config.product.freeRenders,
+      teamRenders: config.product.teamRenders,
+      upgradeUrl: config.product.upgradeUrl || undefined,
+      secret: config.product.secret || undefined,
+      previewTokens: config.product.previewTokens,
+    },
     nudgeMinutes: config.nudgeMinutes,
     forkTimeoutMinutes: config.forkTimeoutMinutes,
   });
+  orch.setDefaultClient(anthropic);
   await orch.resume();
 
   const stt = pickSTT({ preference: config.voice.stt, elevenLabsKey: config.voice.elevenLabsKey || undefined, openaiKey: config.voice.openaiKey || undefined });
@@ -62,6 +74,7 @@ async function main(): Promise<void> {
     throw new Error(explainDiscordError(e));
   }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
+  log.info(`product · metering=${config.product.metering} previewTokens=${config.product.previewTokens} byok=${config.product.secret ? "enabled" : "off (set ARBITER_SECRET)"} maxRenders=${config.product.maxConcurrentRenders}`);
   log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"} · mode=${config.voice.mode} · gate=${gate ? config.voice.gateModel : "off"} · batch=${config.voice.debounceMs}ms`);
   if (stt) log.info("voice dependency report:\n" + generateDependencyReport());
 

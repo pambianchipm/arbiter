@@ -6,6 +6,7 @@ import type { Brand, Fork, Project, Question, Role, TurnResult, Version } from "
 import { nextVersionNumber, nowIso, shortId, ROLES } from "../types.js";
 import { log, errMsg } from "../log.js";
 import { buildHandoffFiles } from "../handoff.js";
+import { assertPublicHttpUrl } from "../net.js";
 
 export interface ToolContext {
   project: Project;
@@ -16,6 +17,10 @@ export interface ToolContext {
   result: TurnResult;
   renderRetries: number;
   brand?: Brand;
+  /** spend n renders from the server's allowance; ok=false means stop and tell the team */
+  meter: (n: number) => Promise<{ ok: boolean; remaining: number; reason?: string }>;
+  /** "?k=<token>" when hosted previews are tokenised, else "" */
+  urlSuffix: string;
   onVersionPublished?: (v: Version) => void;
   onForkOpened?: (f: Fork) => void;
 }
@@ -238,12 +243,14 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
   const html = cleanHtml(input.html);
   const bad = validateHtml(html);
   if (bad) return fail(`Invalid html: ${bad}. Fix and call publish_version again.`);
+  const credit = await ctx.meter(1);
+  if (!credit.ok) return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders and that /plan shows how to add more.`);
 
   const id = `v${nextVersionNumber(p)}`;
   await ctx.store.writeHtml(p.id, id, html);
-  const url = `${ctx.baseUrl}/p/${p.id}/${id}`;
+  const url = `${ctx.baseUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
   const localUrl = `http://localhost:${new URL(ctx.baseUrl).port || 80}`; // screenshots always go through the local server
-  const shotUrl = ctx.baseUrl.startsWith("http://localhost") ? url : `${localUrl}/p/${p.id}/${id}`;
+  const shotUrl = ctx.baseUrl.startsWith("http://localhost") ? url : `${localUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
 
   let shot;
   try {
@@ -313,6 +320,8 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   };
   const [ra, rb] = await Promise.all([resolveSide(a, "A"), resolveSide(b, "B")]);
   if (ra.error || rb.error) return fail(`Invalid fork: ${[ra.error, rb.error].filter(Boolean).join("; ")}`);
+  const credit = await ctx.meter(2);
+  if (!credit.ok) return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders and that /plan shows how to add more.`);
   const htmlA = ra.html!;
   const htmlB = rb.html!;
 
@@ -321,7 +330,7 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   const idB = `v${n}b`;
   await ctx.store.writeHtml(p.id, idA, htmlA);
   await ctx.store.writeHtml(p.id, idB, htmlB);
-  const compareLocal = `${localBase(ctx)}/p/${p.id}/compare/${idA}/${idB}`;
+  const compareLocal = `${localBase(ctx)}/p/${p.id}/compare/${idA}/${idB}${ctx.urlSuffix}`;
   let shot;
   try {
     shot = await ctx.shots.shoot(compareLocal, { width: 2600, height: 900, scale: 1, checkMobile: false });
@@ -338,7 +347,7 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
     changes: [],
     addresses: side.champion ? [String(side.champion)] : [],
     createdAt: nowIso(),
-    previewUrl: `${ctx.baseUrl}/p/${p.id}/${id}`,
+    previewUrl: `${ctx.baseUrl}/p/${p.id}/${id}${ctx.urlSuffix}`,
     approvals: [],
   });
   const vA = mk(idA, a);
@@ -360,7 +369,7 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   await ctx.store.save(p);
   ctx.result.forkOpened = forkId;
   ctx.onForkOpened?.(fork);
-  return ok({ forkId, a: idA, b: idB, compareUrl: `${ctx.baseUrl}/p/${p.id}/compare/${idA}/${idB}` });
+  return ok({ forkId, a: idA, b: idB, compareUrl: `${ctx.baseUrl}/p/${p.id}/compare/${idA}/${idB}${ctx.urlSuffix}` });
 }
 
 export function resolveMentionTargets(p: Project, to: string): string[] {
@@ -410,6 +419,11 @@ async function addConstraint(input: Record<string, unknown>, ctx: ToolContext): 
 async function studyReference(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {
   const url = String(input.url ?? "").trim();
   if (!/^https?:\/\//i.test(url)) return fail("url must start with http:// or https://");
+  try {
+    await assertPublicHttpUrl(url);
+  } catch (e) {
+    return fail(`Can't load ${url}: ${errMsg(e)}. Tell the team and proceed from the brief.`);
+  }
   try {
     const shot = await ctx.shots.shootExternal(url);
     return {

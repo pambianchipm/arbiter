@@ -28,6 +28,13 @@ export const commands = [
     .setDescription("Post the handoff: decision log, constraints, final source, and BUILD.md for a coding agent")
     .addStringOption((o) => o.setName("stack").setDescription("Target stack for BUILD.md, e.g. 'Next.js + Tailwind + shadcn'").setMaxLength(120)),
   new SlashCommandBuilder().setName("status").setDescription("Where this design session stands"),
+  new SlashCommandBuilder().setName("plan").setDescription("This server's plan, renders left, and how to add more"),
+  new SlashCommandBuilder()
+    .setName("setup")
+    .setDescription("Bring your own Anthropic API key for this server (stored encrypted, never shown)")
+    .addSubcommand((sc) => sc.setName("key").setDescription("Save your Anthropic API key").addStringOption((o) => o.setName("key").setDescription("sk-ant-…").setRequired(true)))
+    .addSubcommand((sc) => sc.setName("remove").setDescription("Delete the saved key")),
+  new SlashCommandBuilder().setName("forget").setDescription("Delete this design thread's data from Arbiter (creator or server managers)"),
   new SlashCommandBuilder()
     .setName("brand")
     .setDescription("This server's brand memory: tokens, shared header/footer, rules, and the site map")

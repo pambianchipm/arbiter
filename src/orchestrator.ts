@@ -1,9 +1,12 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { createHash } from "node:crypto";
 import type { Store } from "./store.js";
+import { decrypt, encrypt, maskKey } from "./crypto.js";
 import type { Screenshotter } from "./render/screenshot.js";
 import type { Surface } from "./surface.js";
 import type { Agent } from "./agent/run.js";
 import type { ToolContext } from "./agent/tools.js";
-import type { Brand, Fork, ImageInput, Participant, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
+import type { Brand, Fork, GuildSettings, ImageInput, Participant, Plan, Project, Role, TurnReason, TurnResult, Version } from "./types.js";
 import { absorbShippedPage, brandSummary, newBrand, slugify } from "./brand.js";
 import { currentVersion, nowIso, shortId } from "./types.js";
 import { buildHandoffFiles } from "./handoff.js";
@@ -14,6 +17,8 @@ export interface OrchestratorConfig {
   debounceMs: number;
   /** longer window for spoken feedback so a whole exchange lands in one turn */
   voiceDebounceMs?: number;
+  /** commercial settings; metering off = unlimited (local dev, demos) */
+  product?: { metering: boolean; freeRenders: number; teamRenders: number; upgradeUrl?: string; secret?: string; previewTokens: boolean };
   nudgeMinutes: number;
   forkTimeoutMinutes: number;
 }
@@ -46,6 +51,9 @@ export class Orchestrator {
   private running = new Set<string>();
   private queued = new Map<string, TurnReason>();
   private voice: VoiceLike | undefined;
+  /** per-server Anthropic clients for bring-your-own-key, keyed by guild + key hash */
+  private clients = new Map<string, Anthropic>();
+  private defaultClient: Anthropic | undefined;
 
   constructor(
     private readonly store: Store,
@@ -70,6 +78,97 @@ export class Orchestrator {
 
   attachVoice(v: VoiceLike): void {
     this.voice = v;
+  }
+
+  // ---------------------------------------------------------------- plans, renders, keys
+
+  private get product() {
+    return this.cfg.product ?? { metering: false, freeRenders: 3, teamRenders: 40, previewTokens: false };
+  }
+
+  private allowance(plan: Plan): number {
+    return plan === "team" ? this.product.teamRenders : this.product.freeRenders;
+  }
+
+  async guild(guildId: string): Promise<GuildSettings> {
+    return this.store.getGuild(guildId, { plan: "free", renders: this.product.freeRenders });
+  }
+
+  /** Spend n renders. Resets the monthly allowance when due. Unlimited when metering is off or plan is byok. */
+  async consumeRenders(guildId: string | undefined, n: number): Promise<{ ok: boolean; remaining: number; reason?: string }> {
+    if (!this.product.metering || !guildId) return { ok: true, remaining: Number.POSITIVE_INFINITY };
+    const g = await this.guild(guildId);
+    if (g.plan === "byok" && g.byokKeyEnc) return { ok: true, remaining: Number.POSITIVE_INFINITY };
+    if (Date.parse(g.renewsAt) < Date.now()) {
+      g.rendersRemaining = this.allowance(g.plan);
+      g.renewsAt = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    }
+    if (g.rendersRemaining < n) {
+      await this.store.saveGuild(g);
+      return { ok: false, remaining: g.rendersRemaining, reason: `${g.rendersRemaining} render${g.rendersRemaining === 1 ? "" : "s"} left on the ${g.plan} plan (needs ${n}); resets ${g.renewsAt.slice(0, 10)}` };
+    }
+    g.rendersRemaining -= n;
+    await this.store.saveGuild(g);
+    return { ok: true, remaining: g.rendersRemaining };
+  }
+
+  setDefaultClient(c: Anthropic): void {
+    this.defaultClient = c;
+  }
+
+  /** The server's own client when it brought a key, else ours. */
+  async clientFor(guildId: string | undefined): Promise<Anthropic | undefined> {
+    if (!guildId || !this.product.secret) return this.defaultClient;
+    const g = await this.guild(guildId);
+    if (!g.byokKeyEnc) return this.defaultClient;
+    const cacheKey = `${guildId}:${createHash("sha256").update(g.byokKeyEnc).digest("hex").slice(0, 16)}`;
+    let c = this.clients.get(cacheKey);
+    if (!c) {
+      c = new Anthropic({ apiKey: decrypt(g.byokKeyEnc, this.product.secret) });
+      this.clients.set(cacheKey, c);
+    }
+    return c;
+  }
+
+  async setByokKey(guildId: string, key: string | undefined): Promise<string> {
+    if (!this.product.secret) return "This Arbiter has no ARBITER_SECRET configured, so it can't store keys. Ask the operator.";
+    const g = await this.guild(guildId);
+    if (!key) {
+      g.byokKeyEnc = undefined;
+      if (g.plan === "byok") g.plan = "free";
+      await this.store.saveGuild(g);
+      return "Removed this server's API key. Renders now come from the server's plan allowance.";
+    }
+    if (!/^sk-ant-/.test(key) || key.length < 30) return "That doesn't look like an Anthropic API key (they start with sk-ant-). Nothing was saved.";
+    g.byokKeyEnc = encrypt(key, this.product.secret);
+    g.plan = "byok";
+    await this.store.saveGuild(g);
+    return `Saved ${maskKey(key)} for this server, encrypted. Sessions here now run on your key with unlimited renders. \`/setup remove\` to delete it.`;
+  }
+
+  async planText(guildId: string): Promise<string> {
+    const g = await this.guild(guildId);
+    const upgrade = this.product.upgradeUrl ? this.product.upgradeUrl.replace("{guild}", guildId) : undefined;
+    const L = [`**Plan:** ${g.plan}${g.plan === "byok" ? " (your own key, unlimited renders)" : ""}`];
+    if (!this.product.metering) L.push("Metering is off on this Arbiter: renders are unlimited.");
+    else if (g.plan !== "byok") L.push(`**Renders left:** ${g.rendersRemaining} of ${this.allowance(g.plan)} · resets ${g.renewsAt.slice(0, 10)}`);
+    L.push("A render is one generated version or one fork variant.");
+    if (upgrade) L.push(`Upgrade or buy a pack: ${upgrade}`);
+    L.push("Or bring your own Anthropic key: `/setup key:<your key>` (stored encrypted, never shown).");
+    return L.join("\n");
+  }
+
+  async forget(projectId: string): Promise<boolean> {
+    const p = await this.store.load(projectId);
+    if (!p) return false;
+    this.cancelNudge(projectId);
+    this.cancelForkTimeout(projectId);
+    const d = this.debounce.get(projectId);
+    if (d) clearTimeout(d);
+    this.debounce.delete(projectId);
+    this.pendingImages.delete(projectId);
+    await this.store.deleteProject(projectId);
+    return true;
   }
 
   async setVoiceBinding(projectId: string, info: Project["voice"] | undefined): Promise<void> {
@@ -105,6 +204,7 @@ export class Orchestrator {
     const brand = args.guildId ? await this.resolveBrand(args.guildId, args.brand) : undefined;
     const p: Project = {
       id: args.threadId,
+      token: this.product.previewTokens ? shortId() + shortId() : undefined,
       brandId: brand?.id,
       threadId: args.threadId,
       channelId: args.channelId,
@@ -227,9 +327,12 @@ export class Orchestrator {
       result,
       renderRetries: 0,
       brand,
+      meter: (n) => this.consumeRenders(p.guildId, n),
+      urlSuffix: p.token ? `?k=${p.token}` : "",
       onVersionPublished: (v) => this.scheduleNudge(p.id, v),
       onForkOpened: (f) => this.scheduleForkTimeout(p.id, f),
     };
+    const client = await this.clientFor(p.guildId);
 
     const typing = setInterval(() => void this.surface.typing(p), 8_000);
     void this.surface.typing(p);
@@ -240,7 +343,7 @@ export class Orchestrator {
     const transcriptBefore = p.transcript.length;
     const t0 = Date.now();
     try {
-      await this.agent.runTurn({ project: p, reason, images, currentHtml, brand }, ctx);
+      await this.agent.runTurn({ project: p, reason, images, currentHtml, brand }, ctx, client);
     } catch (e) {
       result.error = errMsg(e);
     } finally {
@@ -421,7 +524,7 @@ export class Orchestrator {
   // ---------------------------------------------------------------- handoff & status
 
   liveUrl(p: Project): string {
-    return `${this.cfg.baseUrl}/live/${p.id}`;
+    return `${this.cfg.baseUrl}/live/${p.id}${p.token ? `?k=${p.token}` : ""}`;
   }
 
   async handoff(projectId: string, stack?: string): Promise<boolean> {

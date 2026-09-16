@@ -25,7 +25,9 @@ export class Agent {
   constructor(
     private readonly client: Anthropic,
     private readonly opts: AgentOptions,
-  ) {}
+  ) {
+    this.active = client;
+  }
 
   /** set once a 400 is traced to optional betas (fast mode / fallbacks); they're dropped for the rest of the process */
   private degraded = false;
@@ -51,22 +53,26 @@ export class Agent {
     };
   }
 
+  /** the client for the turn in progress (a server's own key, or ours) */
+  private active: Anthropic;
+
   private async call(messages: Anthropic.Beta.BetaMessageParam[]): Promise<Anthropic.Beta.BetaMessage> {
     try {
-      return await this.client.beta.messages.stream(this.buildParams(messages, !this.degraded)).finalMessage();
+      return await this.active.beta.messages.stream(this.buildParams(messages, !this.degraded)).finalMessage();
     } catch (e) {
       // A 400 while optional betas are on is almost always the org's API not accepting one of them.
       // Retry once without them and stay degraded for the process lifetime.
       if (e instanceof Anthropic.BadRequestError && !this.degraded && this.hasExtras()) {
         log.warn(`Claude rejected the request (${e.message}). Retrying without optional betas (fast mode / refusal fallbacks) for the rest of this run.`);
         this.degraded = true;
-        return await this.client.beta.messages.stream(this.buildParams(messages, false)).finalMessage();
+        return await this.active.beta.messages.stream(this.buildParams(messages, false)).finalMessage();
       }
       throw e;
     }
   }
 
-  async runTurn(input: TurnInput & { currentHtml?: string }, ctx: ToolContext): Promise<TurnResult> {
+  async runTurn(input: TurnInput & { currentHtml?: string }, ctx: ToolContext, client: Anthropic = this.client): Promise<TurnResult> {
+    this.active = client;
     const result = ctx.result;
     const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: buildTurnContent(input) }];
 

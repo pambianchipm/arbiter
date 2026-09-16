@@ -7,6 +7,7 @@ import {
   GuildMember,
   MessageFlags,
   Partials,
+  PermissionFlagsBits,
   ThreadAutoArchiveDuration,
   type Attachment,
   type AutocompleteInteraction,
@@ -238,6 +239,44 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       }
       const text = (await orch.statusText(inProject)) ?? "No project here.";
       await i.reply({ content: text, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    case "plan": {
+      if (!i.guildId) {
+        await i.reply({ content: "Plans are per server.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await i.reply({ content: await orch.planText(i.guildId), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    case "setup": {
+      if (!i.guildId) {
+        await i.reply({ content: "Run this in a server.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const canManage = typeof i.memberPermissions?.has === "function" && i.memberPermissions.has(PermissionFlagsBits.ManageGuild);
+      if (!canManage) {
+        await i.reply({ content: "Only members with Manage Server can set the server's API key.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const sub = i.options.getSubcommand();
+      const msg = await orch.setByokKey(i.guildId, sub === "key" ? i.options.getString("key", true).trim() : undefined);
+      await i.reply({ content: msg, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    case "forget": {
+      if (!inProject) {
+        await i.reply({ content: "Run `/forget` inside a design thread.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const p = await orch.get(inProject);
+      const canManage = typeof i.memberPermissions?.has === "function" && i.memberPermissions.has(PermissionFlagsBits.ManageGuild);
+      if (p && p.createdBy.id !== i.user.id && !canManage) {
+        await i.reply({ content: "Only the person who started this session, or a server manager, can delete it.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await i.reply({ content: `🗑️ **${name}** deleted this session's data from Arbiter (versions, screenshots, decision log). The thread itself stays.` });
+      await orch.forget(inProject);
       return;
     }
     case "brand": {

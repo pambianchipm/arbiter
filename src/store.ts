@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import type { Brand, Project, Role } from "./types.js";
+import type { Brand, GuildSettings, Project, Role } from "./types.js";
 
 /**
  * Filesystem-backed store. One folder per project:
@@ -135,6 +135,39 @@ export class Store {
     } catch {
       return undefined;
     }
+  }
+
+  // ---- guild settings (plan, renders, keys) ----
+
+  async getGuild(guildId: string, defaults: { plan: GuildSettings["plan"]; renders: number }): Promise<GuildSettings> {
+    const file = path.join(this.dir, "guilds", `${safe(guildId)}.json`);
+    try {
+      return JSON.parse(await fs.readFile(file, "utf8")) as GuildSettings;
+    } catch {
+      const now = new Date();
+      const g: GuildSettings = {
+        guildId,
+        plan: defaults.plan,
+        rendersRemaining: defaults.renders,
+        renewsAt: new Date(now.getTime() + 30 * 86_400_000).toISOString(),
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      await this.saveGuild(g);
+      return g;
+    }
+  }
+
+  async saveGuild(g: GuildSettings): Promise<void> {
+    g.updatedAt = new Date().toISOString();
+    await fs.mkdir(path.join(this.dir, "guilds"), { recursive: true });
+    await atomicWrite(path.join(this.dir, "guilds", `${safe(g.guildId)}.json`), JSON.stringify(g, null, 2));
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    this.cache.delete(id);
+    await fs.rm(this.projectDir(id), { recursive: true, force: true });
+    this.events.emit("change", id);
   }
 
   // ---- brands (per guild) ----

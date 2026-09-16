@@ -1,5 +1,6 @@
 import express from "express";
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import type { Server } from "node:http";
 import type { Store } from "../store.js";
 import { log } from "../log.js";
@@ -12,9 +13,46 @@ import { log } from "../log.js";
  *   GET /p/:project/compare/:a/:b       → A | B side by side (used for fork screenshots)
  *   GET /health
  */
-export function createPreviewServer(store: Store): express.Express {
+export interface PreviewOptions {
+  /** require ?k=<project.token> on preview and canvas URLs (hosted mode) */
+  tokens?: boolean;
+  /** unlocks the /live session index when tokens are on */
+  adminToken?: string;
+  /** markdown files served at /privacy and /terms */
+  legalDir?: string;
+}
+
+export function createPreviewServer(store: Store, opts: PreviewOptions = {}): express.Express {
   const app = express();
   app.disable("x-powered-by");
+
+  // Hosted mode: every project URL must carry the project's token. Legacy projects without one pass.
+  const gate: express.RequestHandler = async (req, res, next) => {
+    if (!opts.tokens) return next();
+    const id = (req.params as Record<string, string>).project;
+    const p = await store.load(id);
+    if (p?.token && req.query.k !== p.token) {
+      res.status(403).type("text/plain").send("This preview link needs its access key. Use the link Arbiter posted in the thread.");
+      return;
+    }
+    next();
+  };
+  app.use(["/p/:project", "/p/:project/*splat", "/live/:project", "/live/:project/*splat"], gate);
+
+  const legal = async (name: string, res: express.Response) => {
+    if (!opts.legalDir) {
+      res.status(404).type("text/plain").send("not configured");
+      return;
+    }
+    try {
+      const md = await fs.readFile(path.join(opts.legalDir, `${name}.md`), "utf8");
+      res.type("html").send(mdPage(md));
+    } catch {
+      res.status(404).type("text/plain").send("not found");
+    }
+  };
+  app.get("/privacy", (_req, res) => void legal("privacy", res));
+  app.get("/terms", (_req, res) => void legal("terms", res));
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
@@ -27,7 +65,7 @@ export function createPreviewServer(store: Store): express.Express {
       res.status(404).type("text/plain").send("variant not found");
       return;
     }
-    res.type("html").send(comparePage(project, a, b));
+    res.type("html").send(comparePage(project, a, b, typeof req.query.k === "string" ? req.query.k : ""));
   });
 
   // Stable link to whatever the current version of a thread is (used for cross-page nav links).
@@ -38,7 +76,8 @@ export function createPreviewServer(store: Store): express.Express {
       res.status(404).type("text/plain").send("no version yet");
       return;
     }
-    res.redirect(302, `/p/${encodeURIComponent(project)}/${p.currentVersionId}`);
+    const k = typeof req.query.k === "string" ? `?k=${encodeURIComponent(req.query.k)}` : "";
+    res.redirect(302, `/p/${encodeURIComponent(project)}/${p.currentVersionId}${k}`);
   });
 
   app.get("/p/:project/:version", async (req, res) => {
@@ -118,7 +157,11 @@ export function createPreviewServer(store: Store): express.Express {
   });
 
   // Index: every session with a link to its live canvas. Also answers a bare /live.
-  app.get(["/", "/live"], async (_req, res) => {
+  app.get(["/", "/live"], async (req, res) => {
+    if (opts.tokens && (!opts.adminToken || req.query.admin !== opts.adminToken)) {
+      res.status(404).type("html").send(`<!doctype html><meta charset="utf-8"><title>Arbiter</title><body style="font-family:system-ui;background:#0f1115;color:#e6e8ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>Arbiter</h1><p>The design agent that settles the argument. Sessions live in Discord; open the link Arbiter posted in your thread.</p><p><a href="/privacy" style="color:#9aa3b2">Privacy</a> · <a href="/terms" style="color:#9aa3b2">Terms</a></p></div></body>`);
+      return;
+    }
     const all = await store.loadAll();
     all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     res.setHeader("Cache-Control", "no-store");
@@ -164,8 +207,24 @@ export async function listenOrFallback(app: express.Express, port: number): Prom
   }
 }
 
-function comparePage(project: string, a: string, b: string): string {
+function mdPage(md: string): string {
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const html = md
+    .split(/\n{2,}/)
+    .map((block) => {
+      const t = block.trim();
+      if (t.startsWith("# ")) return `<h1>${esc(t.slice(2))}</h1>`;
+      if (t.startsWith("## ")) return `<h2>${esc(t.slice(3))}</h2>`;
+      if (t.split("\n").every((l) => l.startsWith("- "))) return `<ul>${t.split("\n").map((l) => `<li>${esc(l.slice(2)).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>")}</li>`).join("")}</ul>`;
+      return `<p>${esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>")}</p>`;
+    })
+    .join("\n");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Arbiter</title><style>body{max-width:720px;margin:40px auto;padding:0 20px;font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.6;color:#1a1a1a}h1{font-size:28px}h2{font-size:20px;margin-top:28px}code{background:#f2f2f2;padding:1px 5px;border-radius:4px}</style></head><body>${html}</body></html>`;
+}
+
+function comparePage(project: string, a: string, b: string, k = ""): string {
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const q = k ? `?k=${encodeURIComponent(k)}` : "";
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Compare ${esc(a)} vs ${esc(b)}</title>
 <style>
@@ -178,8 +237,8 @@ function comparePage(project: string, a: string, b: string): string {
   iframe{display:block;width:1280px;height:800px;border:0;background:#fff}
 </style></head>
 <body><div class="wrap">
-  <div class="card a"><div class="hd"><span class="badge">A</span><span>${esc(a)}</span></div><iframe src="/p/${esc(project)}/${esc(a)}"></iframe></div>
-  <div class="card b"><div class="hd"><span class="badge">B</span><span>${esc(b)}</span></div><iframe src="/p/${esc(project)}/${esc(b)}"></iframe></div>
+  <div class="card a"><div class="hd"><span class="badge">A</span><span>${esc(a)}</span></div><iframe src="/p/${esc(project)}/${esc(a)}${q}"></iframe></div>
+  <div class="card b"><div class="hd"><span class="badge">B</span><span>${esc(b)}</span></div><iframe src="/p/${esc(project)}/${esc(b)}${q}"></iframe></div>
 </div></body></html>`;
 }
 
@@ -267,9 +326,10 @@ function livePage(project: string): string {
 <footer><div class="msg" id="msg"></div><div id="meta"></div></footer>
 <script>
   const P = ${JSON.stringify(project)};
+  const K = new URLSearchParams(location.search).get("k"); const Q = K ? "?k="+encodeURIComponent(K) : "";
   let shown = "";
   async function refresh(){
-    const r = await fetch("/live/"+P+"/state",{cache:"no-store"}); if(!r.ok) return; const s = await r.json();
+    const r = await fetch("/live/"+P+"/state"+Q,{cache:"no-store"}); if(!r.ok) return; const s = await r.json();
     document.getElementById("brief").textContent = s.brief;
     document.getElementById("work").hidden = !s.working;
     document.getElementById("shipped").hidden = s.status !== "shipped";
@@ -290,12 +350,12 @@ function livePage(project: string): string {
       const key = "v:"+s.current.id;
       if (shown === key) return; shown = key;
       main.className = "single";
-      main.innerHTML = '<div class="card"><iframe src="/p/'+P+'/'+s.current.id+'"></iframe></div>';
+      main.innerHTML = '<div class="card"><iframe src="/p/'+P+'/'+s.current.id+Q+'"></iframe></div>';
     }
   }
-  function side(k, v){ return '<div class="card '+k+'"><div class="hd"><span class="badge">'+k.toUpperCase()+'</span><span>'+esc(v.label)+'</span><span class="votes">'+v.votes+' vote'+(v.votes===1?"":"s")+'</span></div><iframe src="/p/'+P+'/'+v.versionId+'"></iframe></div>'; }
+  function side(k, v){ return '<div class="card '+k+'"><div class="hd"><span class="badge">'+k.toUpperCase()+'</span><span>'+esc(v.label)+'</span><span class="votes">'+v.votes+' vote'+(v.votes===1?"":"s")+'</span></div><iframe src="/p/'+P+'/'+v.versionId+Q+'"></iframe></div>'; }
   function esc(x){ return String(x).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]); }
-  const es = new EventSource("/live/"+P+"/events");
+  const es = new EventSource("/live/"+P+"/events"+Q);
   es.onmessage = () => refresh();
   es.onerror = () => setTimeout(refresh, 2000);
   refresh(); setInterval(refresh, 10000);

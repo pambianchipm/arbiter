@@ -270,6 +270,71 @@ async function main(): Promise<void> {
   assert(brand2!.decisions.length === 1 && brand2!.voice === "Warm, specific, no hype.", "remember_for_brand persisted a rule and the voice");
   assert(surface.log.some((l) => l.includes("On the **Default** brand")), "kickoff message says it's building on the brand");
 
+  // ---- Product layer: metering, key encryption, URL guard, tokened previews, legal pages
+  console.log("\n▶ product layer");
+  {
+    const metered = new Orchestrator(store, shots, surface, agent, {
+      baseUrl,
+      debounceMs: 200,
+      nudgeMinutes: 0,
+      forkTimeoutMinutes: 0,
+      product: { metering: true, freeRenders: 3, teamRenders: 40, secret: "test-secret", previewTokens: true },
+    });
+    const r1 = await metered.consumeRenders("meter-guild", 1);
+    const r2 = await metered.consumeRenders("meter-guild", 2);
+    const r3 = await metered.consumeRenders("meter-guild", 1);
+    assert(r1.ok && r2.ok && r2.remaining === 0 && !r3.ok && /0 renders left/.test(r3.reason ?? ""), "free plan: 3 renders then a clear refusal");
+    assert((await metered.consumeRenders(undefined, 5)).ok, "no guild (dry run) is never metered");
+    const saved = await metered.setByokKey("meter-guild", "sk-ant-api03-" + "x".repeat(40));
+    assert(/Saved sk-ant-…xxxx/.test(saved), "byok key saved and masked in the reply");
+    const g = await store.getGuild("meter-guild", { plan: "free", renders: 3 });
+    assert(g.plan === "byok" && g.byokKeyEnc?.startsWith("v1.") && !g.byokKeyEnc.includes("sk-ant"), "key stored encrypted, plan switched to byok");
+    assert((await metered.consumeRenders("meter-guild", 10)).ok, "byok plan is unlimited");
+    assert(/doesn't look like/.test(await metered.setByokKey("meter-guild", "hunter2")), "bad key rejected");
+    const { encrypt, decrypt } = await import("../src/crypto.js");
+    assert(decrypt(encrypt("hello", "s"), "s") === "hello", "encrypt/decrypt roundtrip");
+    let tampered = false;
+    try {
+      decrypt(encrypt("hello", "s"), "wrong");
+    } catch {
+      tampered = true;
+    }
+    assert(tampered, "wrong secret fails closed");
+    const { assertPublicHttpUrl, isPrivateAddress } = await import("../src/net.js");
+    for (const bad of ["http://localhost:3939/", "http://127.0.0.1/", "http://10.0.0.5/x", "http://169.254.169.254/latest/meta-data", "http://[::1]/", "ftp://example.com/", "http://metadata.google.internal/"]) {
+      let refused = false;
+      try {
+        await assertPublicHttpUrl(bad);
+      } catch {
+        refused = true;
+      }
+      assert(refused, `url guard refuses ${bad}`);
+    }
+    assert(isPrivateAddress("192.168.1.1") && isPrivateAddress("fd12::1") && !isPrivateAddress("93.184.216.34") && !isPrivateAddress("2606:2800:220:1:248:1893:25c8:1946"), "private address classifier");
+    await assertPublicHttpUrl("http://93.184.216.34/");
+    assert(true, "url guard accepts a public address");
+
+    // Tokened previews on a second server instance sharing the store
+    const tokened = await listen(createPreviewServer(store, { tokens: true, adminToken: "adm", legalDir: "docs/legal" }), 0);
+    const tport = (tokened.address() as AddressInfo).port;
+    const tp = (await store.load(threadId))!;
+    tp.token = "sekret";
+    await store.save(tp);
+    assert((await fetch(`http://localhost:${tport}/p/${threadId}/v3`)).status === 403, "hosted preview without key → 403");
+    assert((await fetch(`http://localhost:${tport}/p/${threadId}/v3?k=sekret`)).status === 200, "hosted preview with key → 200");
+    assert((await fetch(`http://localhost:${tport}/live/${threadId}/state?k=wrong`)).status === 403, "canvas state with wrong key → 403");
+    const idxHidden = await fetch(`http://localhost:${tport}/live`);
+    assert(idxHidden.status === 404 && (await idxHidden.text()).includes("settles the argument"), "session index hidden when hosted");
+    assert((await fetch(`http://localhost:${tport}/live?admin=adm`)).status === 200, "session index unlocked with admin token");
+    const cur2 = await fetch(`http://localhost:${tport}/p/${threadId}/current?k=sekret`, { redirect: "manual" });
+    assert(cur2.status === 302 && (cur2.headers.get("location") ?? "").endsWith("/v3?k=sekret"), "/current keeps the key on redirect");
+    const priv = await fetch(`http://localhost:${tport}/privacy`);
+    assert(priv.status === 200 && (await priv.text()).includes("Privacy Policy"), "privacy page served from docs/legal");
+    tokened.close();
+    tp.token = undefined;
+    await store.save(tp);
+  }
+
   // ---- Restart survives: fresh store loads state from disk
   const store2 = new Store(dataDir);
   const reloaded = await store2.load(threadId);

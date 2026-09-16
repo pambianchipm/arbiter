@@ -113,8 +113,25 @@ export interface Brand {
   people: Record<string, { name: string; role?: Role }>;
 }
 
+export type Plan = "free" | "team" | "byok";
+
+/** Per-server commercial state. Files now, a table later. */
+export interface GuildSettings {
+  guildId: string;
+  plan: Plan;
+  rendersRemaining: number;
+  renewsAt: string;
+  /** encrypted with ARBITER_SECRET; never logged or echoed */
+  byokKeyEnc?: string;
+  stripeCustomerId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Project {
   id: string; // == threadId
+  /** unguessable suffix for preview/canvas URLs when hosted */
+  token?: string;
   brandId?: string;
   guildId?: string;
   channelId: string;

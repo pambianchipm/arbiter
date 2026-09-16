@@ -45,6 +45,17 @@ export const config = {
     showIgnored: str("VOICE_SHOW_IGNORED", "1") === "1",
     gateModel: str("VOICE_GATE_MODEL", "claude-haiku-4-5"),
   },
+  /** commercial + hosted-mode settings */
+  product: {
+    metering: str("METERING", "0") === "1",
+    freeRenders: num("FREE_RENDERS_PER_MONTH", 3),
+    teamRenders: num("TEAM_RENDERS_PER_MONTH", 40),
+    upgradeUrl: str("UPGRADE_URL"), // e.g. https://arbiter.app/upgrade?guild={guild}
+    secret: str("ARBITER_SECRET"), // encrypts bring-your-own keys at rest
+    previewTokens: str("PREVIEW_TOKENS", str("PUBLIC_BASE_URL") ? "1" : "0") === "1",
+    adminToken: str("ADMIN_TOKEN"), // unlocks the /live session index when hosted
+    maxConcurrentRenders: num("MAX_CONCURRENT_RENDERS", 3),
+  },
   dataDir: str("DATA_DIR", "./data"),
   debounceMs: num("DEBOUNCE_MS", 6000),
   nudgeMinutes: num("NUDGE_MINUTES", 3),

@@ -96,6 +96,14 @@ typical B2B team later; the orchestrator is platform-agnostic and a Slack `Surfa
 First ten customers by hand: post the fork demo video, offer a founding price, onboard them on a
 call, weekly feedback like the Player2 design-partner playbook. Charge from day one.
 
+## Already built (16 Sep)
+
+Render metering in the tools with monthly reset, `/plan`, bring-your-own-key via `/setup` with
+AES-256-GCM at rest, tokened preview and canvas URLs, hidden session index behind `ADMIN_TOKEN`,
+private-address guard on `study_reference`, `/forget`, a render concurrency cap, and `/privacy` +
+`/terms` served from `docs/legal`. All behind env flags; see README "Running it as a product".
+Remaining from the list: hosting itself, Stripe checkout + webhook, retention job, the DB move.
+
 ## 10. Order of work
 
 1. Hosting, domain, SSRF guard, URL tokens, render semaphore, supervision, logs. (2 days)

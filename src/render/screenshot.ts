@@ -19,7 +19,27 @@ export class Screenshotter {
   private browser: Browser | undefined;
   private launching: Promise<Browser> | undefined;
 
-  constructor(private readonly executablePath?: string) {}
+  private inflight = 0;
+  private waiters: (() => void)[] = [];
+
+  constructor(
+    private readonly executablePath?: string,
+    private readonly maxConcurrent = 3,
+  ) {}
+
+  private async acquire(): Promise<void> {
+    if (this.inflight < this.maxConcurrent) {
+      this.inflight++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiters.push(resolve));
+    this.inflight++;
+  }
+
+  private release(): void {
+    this.inflight--;
+    this.waiters.shift()?.();
+  }
 
   private async getBrowser(): Promise<Browser> {
     if (this.browser && this.browser.isConnected()) return this.browser;
@@ -54,6 +74,20 @@ export class Screenshotter {
     const width = opts.width ?? 1280;
     const height = opts.height ?? 800;
     const timeout = opts.timeoutMs ?? 20_000;
+    await this.acquire();
+    try {
+      return await this.shootInner(url, { width, height, timeout, ...opts }, t0);
+    } finally {
+      this.release();
+    }
+  }
+
+  private async shootInner(
+    url: string,
+    opts: { width: number; height: number; timeout: number; scale?: number; fullPage?: boolean; checkMobile?: boolean },
+    t0: number,
+  ): Promise<ShotResult> {
+    const { width, height, timeout } = opts;
     const browser = await this.getBrowser();
     const context = await browser.newContext({
       viewport: { width, height },
