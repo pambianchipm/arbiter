@@ -37,7 +37,7 @@ export function absorbShippedPage(brand: Brand, p: Project, v: Version, html: st
   for (const [id, who] of Object.entries(p.participants)) {
     brand.people[id] = { name: who.name, role: who.role ?? brand.people[id]?.role };
   }
-  const page = { threadId: p.id, brief: p.brief, versionId: v.id, previewUrl: v.previewUrl.replace(/\/v\w+$/, "/current"), shippedAt: nowIso() };
+  const page = { threadId: p.id, brief: p.brief, versionId: v.id, previewUrl: v.previewUrl.replace(/\/v\w+(\?[^#]*)?$/, "/current$1"), shippedAt: nowIso() };
   const i = brand.pages.findIndex((x) => x.threadId === p.id);
   if (i >= 0) brand.pages[i] = page;
   else brand.pages.push(page);

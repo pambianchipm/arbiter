@@ -50,3 +50,31 @@ export async function assertPublicHttpUrl(raw: string): Promise<URL> {
   if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) throw new Error(`${host} resolves to a private address`);
   return u;
 }
+
+/**
+ * Per-request check for a browser context that loads an external site. assertPublicHttpUrl covers the
+ * address the team gave; the page itself can then redirect, embed an iframe, or fetch a sub-resource
+ * from a private address. Every request in the shot goes through this. Results are cached per host.
+ */
+export function publicRequestFilter(): (url: string) => Promise<boolean> {
+  const cache = new Map<string, Promise<boolean>>();
+  return (raw) => {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      return Promise.resolve(false);
+    }
+    // data:, blob: and about:blank never touch the network.
+    if (u.protocol !== "http:" && u.protocol !== "https:") return Promise.resolve(u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:");
+    let hit = cache.get(u.host);
+    if (!hit) {
+      hit = assertPublicHttpUrl(`${u.protocol}//${u.host}/`).then(
+        () => true,
+        () => false,
+      );
+      cache.set(u.host, hit);
+    }
+    return hit;
+  };
+}

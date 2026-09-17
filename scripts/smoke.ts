@@ -7,6 +7,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { Store } from "../src/store.js";
 import { createPreviewServer, listen } from "../src/render/server.js";
@@ -14,6 +15,8 @@ import { Screenshotter } from "../src/render/screenshot.js";
 import { Agent } from "../src/agent/run.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { ConsoleSurface } from "./console-surface.js";
+import type { Project } from "../src/types.js";
+import type { ToolContext } from "../src/agent/tools.js";
 import { HTML_V1, HTML_V2A, HTML_V2B, HTML_V3 } from "./fixtures.js";
 
 type Block = Anthropic.Beta.BetaContentBlock;
@@ -270,6 +273,26 @@ async function main(): Promise<void> {
   assert(brand2!.decisions.length === 1 && brand2!.voice === "Warm, specific, no hype.", "remember_for_brand persisted a rule and the voice");
   assert(surface.log.some((l) => l.includes("On the **Default** brand")), "kickoff message says it's building on the brand");
 
+  // ---- Agent: two servers' turns at once each stay on their own client (bring-your-own-key isolation)
+  console.log("\n▶ agent");
+  {
+    const mkProject = (id: string): Project => ({ id, threadId: id, channelId: "c", brief: id, createdBy: { id: "u", name: "U" }, createdAt: new Date().toISOString(), participants: {}, versions: [], forkHistory: [], constraints: [], decisions: [], questions: [], transcript: [], status: "active", turnCount: 0 });
+    const mkCtx = (project: Project): ToolContext => ({ project, store, shots, surface, baseUrl, result: { text: "", toolCalls: 0, iterations: 0, publishedVersionIds: [] }, renderRetries: 0, meter: async () => ({ ok: true, remaining: Infinity }), refund: async () => undefined, urlSuffix: "" });
+    const fa = new FakeClient();
+    const fb = new FakeClient();
+    fa.push(msg([toolUse("say", { text: "A1" })], "tool_use"), msg([text("A done")], "end_turn"));
+    fb.push(msg([toolUse("say", { text: "B1" })], "tool_use"), msg([text("B done")], "end_turn"));
+    const pa = mkProject("agent_a");
+    const pb = mkProject("agent_b");
+    await store.save(pa);
+    await store.save(pb);
+    const [ra, rb] = await Promise.all([
+      agent.runTurn({ project: pa, reason: { kind: "kickoff" }, images: [] }, mkCtx(pa), fa as unknown as Anthropic),
+      agent.runTurn({ project: pb, reason: { kind: "kickoff" }, images: [] }, mkCtx(pb), fb as unknown as Anthropic),
+    ]);
+    assert(fa.calls.length === 2 && fb.calls.length === 2 && ra.text === "A done" && rb.text === "B done", "concurrent turns each stay on their own client for every iteration");
+  }
+
   // ---- Product layer: metering, key encryption, URL guard, tokened previews, legal pages
   console.log("\n▶ product layer");
   {
@@ -285,6 +308,39 @@ async function main(): Promise<void> {
     const r3 = await metered.consumeRenders("meter-guild", 1);
     assert(r1.ok && r2.ok && r2.remaining === 0 && !r3.ok && /0 renders left/.test(r3.reason ?? ""), "free plan: 3 renders then a clear refusal");
     assert((await metered.consumeRenders(undefined, 5)).ok, "no guild (dry run) is never metered");
+    await metered.refundRenders("meter-guild", 1);
+    assert((await metered.consumeRenders("meter-guild", 1)).ok, "a refunded render can be spent again");
+    const stale = await store.getGuild("meter-stale", { plan: "free", renders: 3 });
+    stale.rendersRemaining = 0;
+    stale.renewsAt = new Date(Date.now() - 1000).toISOString();
+    await store.saveGuild(stale);
+    assert(/Renders left:\*\* 3 of 3/.test(await metered.planText("meter-stale")), "/plan applies the monthly reset instead of showing stale numbers");
+
+    // A version that throws is bounced back to the model and its credit returned: one render spent, not two.
+    fake.push(
+      msg([toolUse("publish_version", { html: HTML_V1.replace("</body>", '<script>throw new Error("boom")</script></body>'), summary: "broken", changes: [], addresses: [] })], "tool_use"),
+      msg([toolUse("publish_version", { html: HTML_V1, summary: "fixed", changes: [], addresses: [] })], "tool_use"),
+      msg([text("done")], "end_turn"),
+    );
+    await metered.startProject({ threadId: "thread_bounce", channelId: "chan", guildId: "meter-bounce", brief: "bounce test", createdBy: { id: "u_priya", name: "Priya" } });
+    await waitFor("bounce turn", async () => (await store.load("thread_bounce"))?.turnCount === 1);
+    const pbounce = (await store.load("thread_bounce"))!;
+    const bounced = fake.calls[fake.calls.length - 2].messages[2].content;
+    assert(Array.isArray(bounced) && bounced[0].type === "tool_result" && bounced[0].is_error === true && String(bounced[0].content).includes("JavaScript errors"), "a page that throws is bounced back to the model, not posted");
+    assert(pbounce.versions.length === 1 && pbounce.versions[0].summary === "fixed", "the fixed retry published as v1");
+    assert((await store.getGuild("meter-bounce", { plan: "free", renders: 3 })).rendersRemaining === 2, "the bounced render was refunded: one credit spent, not two");
+    assert(/^[A-Za-z0-9_-]{16}$/.test(pbounce.token ?? ""), "hosted project got a 16-char random preview token");
+
+    // With a public base URL, links point at the domain and the screenshot still goes through the local listener.
+    const hosted = new Orchestrator(store, shots, surface, agent, { baseUrl: "https://arbiter.example.app", debounceMs: 200, nudgeMinutes: 0, forkTimeoutMinutes: 0 });
+    fake.push(msg([toolUse("publish_version", { html: HTML_V1, summary: "hosted v1", changes: [], addresses: [] })], "tool_use"), msg([text("up")], "end_turn"));
+    await hosted.startProject({ threadId: "thread_hosted", channelId: "chan", guildId: "guild", brief: "hosted page", createdBy: { id: "u_priya", name: "Priya" } });
+    await waitFor("hosted turn", async () => (await store.load("thread_hosted"))?.turnCount === 1);
+    const ph = (await store.load("thread_hosted"))!;
+    assert(ph.versions.length === 1 && ph.versions[0].previewUrl === "https://arbiter.example.app/p/thread_hosted/v1" && ((await store.readPng("thread_hosted", "v1"))?.length ?? 0) > 10_000, "public base URL: version links publicly and rendered through localhost");
+    const { absorbShippedPage, newBrand } = await import("../src/brand.js");
+    const bt = absorbShippedPage(newBrand("g", "T"), ph, { ...ph.versions[0], previewUrl: "https://arbiter.example.app/p/thread_hosted/v3?k=abc" }, HTML_V1);
+    assert(bt.pages[0].previewUrl === "https://arbiter.example.app/p/thread_hosted/current?k=abc", "site map keeps the access key on /current links");
     const saved = await metered.setByokKey("meter-guild", "sk-ant-api03-" + "x".repeat(40));
     assert(/Saved sk-ant-…xxxx/.test(saved), "byok key saved and masked in the reply");
     const g = await store.getGuild("meter-guild", { plan: "free", renders: 3 });
@@ -333,6 +389,52 @@ async function main(): Promise<void> {
     tokened.close();
     tp.token = undefined;
     await store.save(tp);
+
+    // The browser can be redirected or made to embed a private address; every request is checked, not just the first.
+    const { publicRequestFilter } = await import("../src/net.js");
+    const filt = publicRequestFilter();
+    assert((await filt("data:text/html,hi")) && !(await filt("http://127.0.0.1/")) && !(await filt("http://localhost:3939/x")) && (await filt("http://93.184.216.34/a")), "request filter: data ok, private refused, public ok");
+    let secretHits = 0;
+    const trap = http.createServer((req, res) => {
+      if (req.url === "/redirect") {
+        res.writeHead(302, { location: `http://127.0.0.1:${(trap.address() as AddressInfo).port}/secret` });
+        res.end();
+        return;
+      }
+      if (req.url === "/bounce") {
+        res.writeHead(302, { location: "/landing" });
+        res.end();
+        return;
+      }
+      if (req.url === "/landing") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<title>landing</title><h1>landed</h1>");
+        return;
+      }
+      if (req.url === "/secret") {
+        secretHits++;
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<title>secret</title><h1>secret</h1>");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end('<title>frame</title><iframe src="/secret"></iframe>');
+    });
+    await new Promise<void>((r) => trap.listen(0, "127.0.0.1", r));
+    const trapPort = (trap.address() as AddressInfo).port;
+    const onlyNotSecret = async (u: string) => !u.includes("/secret");
+    let redirectBlocked = false;
+    try {
+      await shots.shoot(`http://127.0.0.1:${trapPort}/redirect`, { requestFilter: onlyNotSecret, timeoutMs: 5000, checkMobile: false });
+    } catch {
+      redirectBlocked = true;
+    }
+    assert(redirectBlocked && secretHits === 0, "a redirect to a blocked address aborts the shot before the target is fetched");
+    const landed = await shots.shoot(`http://127.0.0.1:${trapPort}/bounce`, { requestFilter: onlyNotSecret, checkMobile: false });
+    assert(landed.title === "landing", "an allowed redirect is followed hop by hop");
+    const framed = await shots.shoot(`http://127.0.0.1:${trapPort}/frame`, { requestFilter: onlyNotSecret, checkMobile: false });
+    assert(framed.title === "frame" && secretHits === 0 && framed.warnings.some((w) => w.startsWith("blocked request")), "an iframe to a blocked address is aborted and reported");
+    trap.close();
   }
 
   // ---- Restart survives: fresh store loads state from disk

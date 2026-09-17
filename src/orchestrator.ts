@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Store } from "./store.js";
 import { decrypt, encrypt, maskKey } from "./crypto.js";
 import type { Screenshotter } from "./render/screenshot.js";
@@ -94,15 +94,20 @@ export class Orchestrator {
     return this.store.getGuild(guildId, { plan: "free", renders: this.product.freeRenders });
   }
 
+  /** Apply the monthly reset if it is due. Returns true when the record changed. */
+  private refreshAllowance(g: GuildSettings): boolean {
+    if (Date.parse(g.renewsAt) >= Date.now()) return false;
+    g.rendersRemaining = this.allowance(g.plan);
+    g.renewsAt = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    return true;
+  }
+
   /** Spend n renders. Resets the monthly allowance when due. Unlimited when metering is off or plan is byok. */
   async consumeRenders(guildId: string | undefined, n: number): Promise<{ ok: boolean; remaining: number; reason?: string }> {
     if (!this.product.metering || !guildId) return { ok: true, remaining: Number.POSITIVE_INFINITY };
     const g = await this.guild(guildId);
     if (g.plan === "byok" && g.byokKeyEnc) return { ok: true, remaining: Number.POSITIVE_INFINITY };
-    if (Date.parse(g.renewsAt) < Date.now()) {
-      g.rendersRemaining = this.allowance(g.plan);
-      g.renewsAt = new Date(Date.now() + 30 * 86_400_000).toISOString();
-    }
+    this.refreshAllowance(g);
     if (g.rendersRemaining < n) {
       await this.store.saveGuild(g);
       return { ok: false, remaining: g.rendersRemaining, reason: `${g.rendersRemaining} render${g.rendersRemaining === 1 ? "" : "s"} left on the ${g.plan} plan (needs ${n}); resets ${g.renewsAt.slice(0, 10)}` };
@@ -110,6 +115,15 @@ export class Orchestrator {
     g.rendersRemaining -= n;
     await this.store.saveGuild(g);
     return { ok: true, remaining: g.rendersRemaining };
+  }
+
+  /** Give renders back when a charged version never posted (render failed, bounced for JS errors or overflow). */
+  async refundRenders(guildId: string | undefined, n: number): Promise<void> {
+    if (!this.product.metering || !guildId) return;
+    const g = await this.guild(guildId);
+    if (g.plan === "byok" && g.byokKeyEnc) return;
+    g.rendersRemaining += n;
+    await this.store.saveGuild(g);
   }
 
   setDefaultClient(c: Anthropic): void {
@@ -148,6 +162,7 @@ export class Orchestrator {
 
   async planText(guildId: string): Promise<string> {
     const g = await this.guild(guildId);
+    if (this.refreshAllowance(g)) await this.store.saveGuild(g);
     const upgrade = this.product.upgradeUrl ? this.product.upgradeUrl.replace("{guild}", guildId) : undefined;
     const L = [`**Plan:** ${g.plan}${g.plan === "byok" ? " (your own key, unlimited renders)" : ""}`];
     if (!this.product.metering) L.push("Metering is off on this Arbiter: renders are unlimited.");
@@ -204,7 +219,7 @@ export class Orchestrator {
     const brand = args.guildId ? await this.resolveBrand(args.guildId, args.brand) : undefined;
     const p: Project = {
       id: args.threadId,
-      token: this.product.previewTokens ? shortId() + shortId() : undefined,
+      token: this.product.previewTokens ? randomBytes(12).toString("base64url") : undefined,
       brandId: brand?.id,
       threadId: args.threadId,
       channelId: args.channelId,
@@ -328,6 +343,7 @@ export class Orchestrator {
       renderRetries: 0,
       brand,
       meter: (n) => this.consumeRenders(p.guildId, n),
+      refund: (n) => this.refundRenders(p.guildId, n),
       urlSuffix: p.token ? `?k=${p.token}` : "",
       onVersionPublished: (v) => this.scheduleNudge(p.id, v),
       onForkOpened: (f) => this.scheduleForkTimeout(p.id, f),

@@ -19,6 +19,8 @@ export interface ToolContext {
   brand?: Brand;
   /** spend n renders from the server's allowance; ok=false means stop and tell the team */
   meter: (n: number) => Promise<{ ok: boolean; remaining: number; reason?: string }>;
+  /** give n renders back: a version that failed its render check was never posted, so it is not charged */
+  refund: (n: number) => Promise<void>;
   /** "?k=<token>" when hosted previews are tokenised, else "" */
   urlSuffix: string;
   onVersionPublished?: (v: Version) => void;
@@ -249,28 +251,33 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
   const id = `v${nextVersionNumber(p)}`;
   await ctx.store.writeHtml(p.id, id, html);
   const url = `${ctx.baseUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
-  const localUrl = `http://localhost:${new URL(ctx.baseUrl).port || 80}`; // screenshots always go through the local server
-  const shotUrl = ctx.baseUrl.startsWith("http://localhost") ? url : `${localUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
+  // Screenshots always go through the local listener, even when the public URL is a tunnel or a domain.
+  const shotUrl = `${localBase(ctx)}/p/${p.id}/${id}${ctx.urlSuffix}`;
+  // A version that never posts is not a render the server paid for.
+  const bounce = async (msg: string): Promise<ToolOutput> => {
+    await ctx.refund(1);
+    return fail(msg);
+  };
 
   let shot;
   try {
     shot = await ctx.shots.shoot(shotUrl);
   } catch (e) {
-    return fail(`Render failed for ${id}: ${errMsg(e)}. Check the HTML for a syntax problem and call publish_version again.`);
+    return bounce(`Render failed for ${id}: ${errMsg(e)}. Check the HTML for a syntax problem and call publish_version again.`);
   }
   const expectedTitle = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
   if (expectedTitle && shot.title.trim() !== expectedTitle) {
-    return fail(`Render of ${id} captured the wrong page (title "${shot.title}" instead of "${expectedTitle}"). This is an infrastructure problem (preview server or proxy), not your HTML; tell the team and stop.`);
+    return bounce(`Render of ${id} captured the wrong page (title "${shot.title}" instead of "${expectedTitle}"). This is an infrastructure problem (preview server or proxy), not your HTML; tell the team and stop.`);
   }
   const pageErrors = shot.warnings.filter((w) => w.startsWith("page error"));
   if (pageErrors.length && ctx.renderRetries < 1) {
     ctx.renderRetries++;
-    return fail(`${id} rendered but threw JavaScript errors: ${pageErrors.join("; ")}. Fix them and call publish_version again (the broken version was NOT posted).`);
+    return bounce(`${id} rendered but threw JavaScript errors: ${pageErrors.join("; ")}. Fix them and call publish_version again (the broken version was NOT posted).`);
   }
   const overflow = shot.warnings.find((w) => w.startsWith("horizontal overflow at"));
   if (overflow && ctx.renderRetries < 1) {
     ctx.renderRetries++;
-    return fail(
+    return bounce(
       `${id} scrolls sideways: ${overflow}. Something is wider than the viewport (a decorative blob, a fixed pixel width, a grid that doesn't collapse). Put decorative elements inside a relative parent with overflow-hidden, drop fixed widths, and call publish_version again (the broken version was NOT posted).`,
     );
   }
@@ -335,6 +342,7 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   try {
     shot = await ctx.shots.shoot(compareLocal, { width: 2600, height: 900, scale: 1, checkMobile: false });
   } catch (e) {
+    await ctx.refund(2);
     return fail(`Render failed for the comparison: ${errMsg(e)}. Check both HTML documents and call fork_variants again.`);
   }
   const forkId = `f${n}`;

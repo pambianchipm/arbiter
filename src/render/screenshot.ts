@@ -1,5 +1,9 @@
 import { chromium, type Browser } from "playwright";
 import { log, errMsg } from "../log.js";
+import { publicRequestFilter } from "../net.js";
+
+/** decides per request whether the browser may fetch a URL during a shot */
+export type RequestFilter = (url: string) => Promise<boolean>;
 
 export interface ShotResult {
   png: Buffer;
@@ -68,7 +72,7 @@ export class Screenshotter {
 
   async shoot(
     url: string,
-    opts: { width?: number; height?: number; scale?: number; fullPage?: boolean; timeoutMs?: number; checkMobile?: boolean } = {},
+    opts: { width?: number; height?: number; scale?: number; fullPage?: boolean; timeoutMs?: number; checkMobile?: boolean; requestFilter?: RequestFilter } = {},
   ): Promise<ShotResult> {
     const t0 = Date.now();
     const width = opts.width ?? 1280;
@@ -84,7 +88,7 @@ export class Screenshotter {
 
   private async shootInner(
     url: string,
-    opts: { width: number; height: number; timeout: number; scale?: number; fullPage?: boolean; checkMobile?: boolean },
+    opts: { width: number; height: number; timeout: number; scale?: number; fullPage?: boolean; checkMobile?: boolean; requestFilter?: RequestFilter },
     t0: number,
   ): Promise<ShotResult> {
     const { width, height, timeout } = opts;
@@ -98,6 +102,35 @@ export class Screenshotter {
     });
     const warnings: string[] = [];
     try {
+      const allow = opts.requestFilter;
+      if (allow) {
+        // Iframes and sub-resources are separate requests and each one is checked. Redirects are not:
+        // Playwright follows a continued request's redirects without calling the handler again, so the
+        // handler fetches with redirects off, checks every hop itself, and fulfills the final response.
+        await context.route("**/*", async (route) => {
+          const block = async (u: string) => {
+            warnings.push(`blocked request to ${trunc(u)} (not a public address)`);
+            await route.abort("blockedbyclient").catch(() => undefined);
+          };
+          let url = route.request().url();
+          if (!(await allow(url))) return block(url);
+          try {
+            let resp = await route.fetch({ maxRedirects: 0 });
+            for (let hop = 0; hop < 5; hop++) {
+              const location = resp.headers()["location"];
+              if (!(resp.status() >= 300 && resp.status() < 400 && location)) break;
+              const next = new URL(location, url).toString();
+              if (!(await allow(next))) return block(next);
+              url = next;
+              resp = await route.fetch({ url: next, maxRedirects: 0 });
+            }
+            await route.fulfill({ response: resp });
+          } catch (e) {
+            warnings.push(`request failed: ${trunc(url)} (${errMsg(e).split("\n")[0]})`);
+            await route.abort("failed").catch(() => undefined);
+          }
+        });
+      }
       const page = await context.newPage();
       page.on("console", (m) => {
         if (m.type() === "error") warnings.push(`console.error: ${trunc(m.text())}`);
@@ -143,10 +176,10 @@ export class Screenshotter {
     }
   }
 
-  /** Screenshot an arbitrary external site (reference study). Smaller scale, capped wait. */
+  /** Screenshot an arbitrary external site (reference study). Smaller scale, capped wait, every request checked against private ranges. */
   async shootExternal(url: string): Promise<ShotResult> {
     try {
-      return await this.shoot(url, { width: 1280, height: 900, scale: 1, timeoutMs: 25_000, checkMobile: false });
+      return await this.shoot(url, { width: 1280, height: 900, scale: 1, timeoutMs: 25_000, checkMobile: false, requestFilter: publicRequestFilter() });
     } catch (e) {
       log.warn("external screenshot failed", url, errMsg(e));
       throw e;
