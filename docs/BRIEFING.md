@@ -27,6 +27,15 @@ real model in a real thread unless marked otherwise.
 - Address mode and the relevance gate in a real noisy room (shipped after Phin's report that the
   bot reacted to everything; not yet confirmed by him).
 
+**Landed 17 Sep (sandbox, smoke-tested, not yet run live)**
+- Hosted-mode fixes: renders work behind `PUBLIC_BASE_URL`, bring-your-own-key clients stay per turn,
+  bounced renders are refunded, reference sites are checked hop by hop (redirects, iframes), site-map
+  links keep `?k=`, preview tokens are random, `/plan` applies the monthly reset.
+- Cost: two cache breakpoints per request, `ARBITER_EDIT_MODEL` (Sonnet 5) for one person's feedback on
+  an existing page, Opus-only betas keyed on the model, token usage on `/status` and the terminal.
+- To verify on the laptop: `git pull`, stop and start the bot (new env var), run a session, then
+  `/status`. The `Last turn` line should show tokens from cache on any turn with two or more steps.
+
 ## What we learned about the product
 
 - The conflict moment is the demo. Judges will call it "Lovable in Discord" unless they see two
@@ -63,7 +72,9 @@ Wi-Fi blocks UDP, voice needs a phone hotspot.
 - The live canvas iframe shows the page at the pane's width; pages are checked for sideways scroll
   at 1280px and 390px but not at arbitrary widths.
 - Nudge/fork timers are in-memory; a restart forgets pending nudges (state itself survives).
-- Message history within a turn is not prompt-cached yet (roadmap item 1).
+- The cost work has not been measured on a real session. Compare the `turn done` token lines against
+  the ~$3 per session estimate; if Sonnet edit turns over-talk or re-ask, that is a prompt fix, not a
+  reason to switch back.
 - The voice relevance gate fails open; if Haiku is unreachable every line counts.
 - ElevenLabs Scribe request shape (`model_id=scribe_v1`, multipart `file`) worked on Phin's key;
   if their API changes, `stt failed:` lines in the terminal show the response.
@@ -81,7 +92,8 @@ when a failure is only visible in the terminal, surface it where he is looking.
 
 1. Confirm the noise fixes in a real call (`/voice join mode:address`), tune `VOICE_*` if needed.
 2. Rehearse the two-person fork in Discord once.
-3. Cost work: cache message history within a turn; Sonnet for edit turns. Measure with
-   `response.usage` before and after.
-4. Productization scaffolding: per-server settings + BYOK, render counter, privacy policy/terms.
+3. Measure the cost work on one full session (`/status` after each turn) and watch Sonnet's edit turns
+   for quality.
+4. Hosting: a box, a domain, `PUBLIC_BASE_URL`, `PREVIEW_TOKENS`, `ARBITER_SECRET`, `METERING=1`. Then
+   Stripe checkout + webhook, the retention job, the DB move (docs/PRODUCT.md).
 5. Slack surface if a second environment is wanted for the pitch; the orchestrator is ready for it.

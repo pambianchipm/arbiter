@@ -97,10 +97,10 @@ PUBLIC_BASE_URL=https://xyz.ngrok.app npm run dev
 
 Everything below is off by default so local dev and demos are unchanged. Turn it on when the bot serves strangers:
 
-- `METERING=1` enforces render allowances per server: **free** (3/month), **team** (40/month), or **byok** (unlimited on the server's own key). A render is one version or one fork variant; the tools spend credits and, when a server is out, the agent says so and points at `/plan`. Plans live in `data/guilds/<id>.json`; wire `UPGRADE_URL` to your Stripe checkout page.
+- `METERING=1` enforces render allowances per server: **free** (3/month), **team** (40/month), or **byok** (unlimited on the server's own key). A render is one version or one fork variant; the tools spend credits and, when a server is out, the agent says so and points at `/plan`. A version the render check bounces (JS error, sideways scroll) is refunded. Plans live in `data/guilds/<id>.json`; wire `UPGRADE_URL` to your Stripe checkout page.
 - `/setup key:<sk-ant-…>` lets a server bring its own Anthropic key (Manage Server only). Set `ARBITER_SECRET`; keys are encrypted at rest and never echoed.
 - `PREVIEW_TOKENS=1` (automatic when `PUBLIC_BASE_URL` is set) puts an unguessable key on every preview and canvas URL, and hides the session index unless `?admin=<ADMIN_TOKEN>`.
-- `study_reference` refuses private and internal addresses, so it can't be pointed at localhost or cloud metadata.
+- `study_reference` refuses private and internal addresses, so it can't be pointed at localhost or cloud metadata. Every request the page then makes is checked too, including redirects and iframes.
 - `/forget` deletes a thread's data (creator or server managers). `/privacy` and `/terms` serve `docs/legal/*.md`; fill in the contact line and give Discord those URLs.
 - `MAX_CONCURRENT_RENDERS` caps Chromium contexts (default 3).
 
@@ -133,6 +133,7 @@ Nobody points Arbiter at a GitHub repo or a laptop. It is a bot process plus a s
 See `.env.example`. Notable:
 
 - `ARBITER_MODEL` (default `claude-opus-5`), `ARBITER_EFFORT` (default `medium`; raise for quality, lower for speed).
+- `ARBITER_EDIT_MODEL` (default `claude-sonnet-5`): one person's feedback on an existing page runs here. Kickoff, forks, fork winners and any batch with several authors stay on `ARBITER_MODEL`. Set it to `same` to use one model. `/status` shows which model ran the last turn and its token counts, including how much came from cache.
 - `ARBITER_FAST_MODE=1` uses Opus fast mode for a snappier live demo (premium pricing).
 - `ARBITER_FALLBACKS=0` disables server-side refusal fallbacks if your org's API doesn't accept the beta.
 - `DEBOUNCE_MS`, `NUDGE_MINUTES`, `FORK_TIMEOUT_MINUTES` tune the group dynamics.

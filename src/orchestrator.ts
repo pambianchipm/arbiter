@@ -331,6 +331,7 @@ export class Orchestrator {
     const cur = currentVersion(p);
     const currentHtml = cur ? await this.store.readHtml(p.id, cur.id) : undefined;
     const brand = await this.brandFor(p);
+    const tier = this.tierFor(p, reason);
 
     const result: TurnResult = { text: "", toolCalls: 0, iterations: 0, publishedVersionIds: [] };
     const ctx: ToolContext = {
@@ -359,7 +360,7 @@ export class Orchestrator {
     const transcriptBefore = p.transcript.length;
     const t0 = Date.now();
     try {
-      await this.agent.runTurn({ project: p, reason, images, currentHtml, brand }, ctx, client);
+      await this.agent.runTurn({ project: p, reason, images, currentHtml, brand, tier }, ctx, client);
     } catch (e) {
       result.error = errMsg(e);
     } finally {
@@ -369,7 +370,7 @@ export class Orchestrator {
 
     for (const t of p.transcript) if (t.kind === "human") t.seen = true;
     p.turnCount++;
-    p.lastTurn = { ...(p.lastTurn ?? { startedAt: nowIso(), reason: reason.kind }), endedAt: nowIso(), error: result.error, toolCalls: result.toolCalls, ms: Date.now() - t0 };
+    p.lastTurn = { ...(p.lastTurn ?? { startedAt: nowIso(), reason: reason.kind }), endedAt: nowIso(), error: result.error, toolCalls: result.toolCalls, ms: Date.now() - t0, model: result.model, usage: result.usage };
     await this.store.save(p);
 
     if (result.text) await this.surface.postText(p, result.text);
@@ -384,8 +385,21 @@ export class Orchestrator {
       const spoken = [...said, ...asked, result.text].filter(Boolean).join(" ");
       if (spoken) this.voice.speak(p.id, spoken);
     }
-    log.info(`turn done ${p.id} reason=${reason.kind} tools=${result.toolCalls} iters=${result.iterations} ${Date.now() - t0}ms${result.error ? " error=" + result.error : ""}`);
+    const u = result.usage;
+    log.info(
+      `turn done ${p.id} reason=${reason.kind} model=${result.model} tools=${result.toolCalls} iters=${result.iterations} ${Date.now() - t0}ms${u ? ` tokens in=${u.input} cached=${u.cacheRead} written=${u.cacheWrite} out=${u.output}` : ""}${result.error ? " error=" + result.error : ""}`,
+    );
     return result;
+  }
+
+  /**
+   * Edit turns are one person's feedback on an existing page; the cheaper model handles them. Kickoff,
+   * fork winners, and any batch with several authors (where a conflict is likely) use the full model.
+   */
+  private tierFor(p: Project, reason: TurnReason): "full" | "edit" {
+    if (reason.kind !== "feedback" || !p.currentVersionId) return "full";
+    const authors = new Set(p.transcript.filter((t) => t.kind === "human" && !t.seen).map((t) => t.userId ?? t.name));
+    return authors.size <= 1 ? "edit" : "full";
   }
 
   // ---------------------------------------------------------------- brand memory
@@ -566,6 +580,14 @@ export class Orchestrator {
     }
     const people = Object.values(p.participants).map((x) => `${x.name} (${x.role ?? "no role"})`);
     L.push(`People: ${people.join(", ")}`);
+    if (p.lastTurn?.endedAt) {
+      const t = p.lastTurn;
+      const u = t.usage;
+      const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+      L.push(
+        `Last turn: ${t.reason} on ${t.model ?? "?"}, ${Math.round((t.ms ?? 0) / 1000)}s${u ? ` · ${k(u.input + u.cacheRead + u.cacheWrite)} tokens in (${k(u.cacheRead)} from cache), ${k(u.output)} out` : ""}${t.error ? ` · ⚠️ ${t.error}` : ""}`,
+      );
+    }
     L.push(`Live canvas: ${this.liveUrl(p)}`);
     return L.join("\n");
   }

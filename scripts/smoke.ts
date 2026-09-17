@@ -28,11 +28,11 @@ function text(t: string): Block {
   return { type: "text", text: t, citations: null } as unknown as Block;
 }
 function msg(content: Block[], stop: "tool_use" | "end_turn"): Anthropic.Beta.BetaMessage {
-  return { id: "msg_fake", type: "message", role: "assistant", model: "fake", content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } as unknown as Anthropic.Beta.BetaMessage;
+  return { id: "msg_fake", type: "message", role: "assistant", model: "fake", content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 40, cache_creation_input_tokens: 0 } } as unknown as Anthropic.Beta.BetaMessage;
 }
 
 class FakeClient {
-  public calls: Array<{ messages: Anthropic.Beta.BetaMessageParam[] }> = [];
+  public calls: Array<{ messages: Anthropic.Beta.BetaMessageParam[]; params: Record<string, unknown> }> = [];
   private queue: Anthropic.Beta.BetaMessage[] = [];
   push(...m: Anthropic.Beta.BetaMessage[]): void {
     this.queue.push(...m);
@@ -40,7 +40,7 @@ class FakeClient {
   beta = {
     messages: {
       stream: (params: { messages: Anthropic.Beta.BetaMessageParam[] }) => {
-        this.calls.push({ messages: params.messages });
+        this.calls.push({ messages: params.messages, params: params as unknown as Record<string, unknown> });
         const next = this.queue.shift();
         return {
           finalMessage: async () => {
@@ -107,7 +107,8 @@ async function main(): Promise<void> {
   process.env.PORT = String(port);
   const shots = new Screenshotter(process.env.CHROMIUM_PATH || undefined);
   const fake = new FakeClient();
-  const agent = new Agent(fake as unknown as Anthropic, { model: "fake", effort: "low", fastMode: false, maxIterations: 6, fallbacks: false });
+  const agent = new Agent(fake as unknown as Anthropic, { model: "fake-opus", editModel: "fake-sonnet", effort: "low", fastMode: false, maxIterations: 6, fallbacks: false });
+  const modelOf = (call: number) => (fake.calls[call].params as { model: string }).model;
   const surface = new ConsoleSurface();
   const orch = new Orchestrator(store, shots, surface, agent, { baseUrl, debounceMs: 200, nudgeMinutes: 0, forkTimeoutMinutes: 0 });
 
@@ -137,6 +138,14 @@ async function main(): Promise<void> {
   })();
   assert(tailwindLoaded, "preview reachable");
   assert(p.questions.length === 1 && p.questions[0].to === "designer", "question logged for designer");
+  {
+    const req = fake.calls[0].params as { cache_control?: { type: string }; system: { cache_control?: { type: string } }[] };
+    assert(modelOf(0) === "fake-opus" && modelOf(1) === "fake-opus", "kickoff runs on the full model");
+    assert(req.cache_control?.type === "ephemeral" && req.system[0].cache_control?.type === "ephemeral", "request caches the system prefix and the growing message history");
+    const u = p.lastTurn?.usage;
+    assert(p.lastTurn?.model === "fake-opus" && u?.input === 200 && u.output === 20 && u.cacheRead === 80 && u.cacheWrite === 0, "token usage summed over the turn's calls and persisted on lastTurn");
+    assert(/Last turn: kickoff on fake-opus, \d+s · 280 tokens in \(80 from cache\), 20 out/.test((await orch.statusText(threadId)) ?? ""), "/status shows the last turn's model and tokens");
+  }
   assert(surface.log.some((l) => l.startsWith("📐 v1")), "version posted to surface");
   const res = await fetch(`${baseUrl}/p/${threadId}/v1`);
   assert(res.status === 200 && (await res.text()).includes("<html"), "preview server serves v1");
@@ -159,6 +168,7 @@ async function main(): Promise<void> {
   assert(t2text.includes("NEW") && t2text.includes("Sam (designer)") && t2text.includes("Priya (pm)"), "turn prompt attributes both asks with roles");
   assert(t2text.includes("<html"), "turn prompt carries current version html");
   assert(p.fork && !p.fork.resolved && p.fork.id === "f2", "fork f2 is open");
+  assert(modelOf(2) === "fake-opus", "two authors in one batch → full model (a conflict is likely)");
   assert(p.versions.map((v) => v.id).join(",") === "v1,v2a,v2b", "variants v2a/v2b stored");
   assert((await store.readHtml(threadId, "v2a")) === (await store.readHtml(threadId, "v1")), "reuse_version copied v1's html into v2a");
   const cmp = await fetch(`${baseUrl}/p/${threadId}/compare/v2a/v2b`);
@@ -173,6 +183,7 @@ async function main(): Promise<void> {
   await waitFor("turn 2b", async () => (await store.load(threadId))?.turnCount === 3);
   p = (await store.load(threadId))!;
   assert(p.versions.length === 3, "publish_version refused while fork open");
+  assert(modelOf(4) === "fake-sonnet", "one person's feedback on an existing page → edit model");
   const refusal = fake.calls[fake.calls.length - 1].messages[2].content;
   assert(Array.isArray(refusal) && refusal[0].type === "tool_result" && refusal[0].is_error === true, "model received is_error tool result");
 
@@ -192,6 +203,7 @@ async function main(): Promise<void> {
   p = (await store.load(threadId))!;
   assert(!p.fork && p.forkHistory.length === 1 && p.forkHistory[0].resolved?.winner === "a", "fork moved to history with winner A");
   assert(p.currentVersionId === "v3", "v3 built from the winner");
+  assert(modelOf(6) === "fake-opus", "the fork winner is built on the full model");
   assert(p.decisions.length === 1 && p.constraints.length === 1, "decision + constraint logged");
   assert(surface.log.some((l) => l.includes("Handoff for") && l.includes(".zip") && l.includes("Next.js + Tailwind")), "agent's post_handoff tool posted the zip with the stack");
   const t3 = fake.calls[fake.calls.length - 2].messages[0].content;
@@ -276,6 +288,14 @@ async function main(): Promise<void> {
   // ---- Agent: two servers' turns at once each stay on their own client (bring-your-own-key isolation)
   console.log("\n▶ agent");
   {
+    const { requestExtras, modelFor } = await import("../src/agent/run.js");
+    const on = { fastMode: true, fallbacks: true };
+    const opus = requestExtras("claude-opus-5", on, true);
+    assert(opus.speed === "fast" && opus.fallbacks === "default" && opus.betas.length === 2, "opus requests carry fast mode and refusal fallbacks");
+    const sonnet = requestExtras("claude-sonnet-5", on, true);
+    assert(!sonnet.speed && !sonnet.fallbacks && sonnet.betas.length === 0, "sonnet requests never carry the Opus-only betas");
+    assert(requestExtras("claude-opus-5", on, false).betas.length === 0, "a degraded model runs without the betas");
+    assert(modelFor({ model: "a", editModel: "b" }, "edit") === "b" && modelFor({ model: "a", editModel: "b" }, "full") === "a" && modelFor({ model: "a" }, "edit") === "a", "model tier routing");
     const mkProject = (id: string): Project => ({ id, threadId: id, channelId: "c", brief: id, createdBy: { id: "u", name: "U" }, createdAt: new Date().toISOString(), participants: {}, versions: [], forkHistory: [], constraints: [], decisions: [], questions: [], transcript: [], status: "active", turnCount: 0 });
     const mkCtx = (project: Project): ToolContext => ({ project, store, shots, surface, baseUrl, result: { text: "", toolCalls: 0, iterations: 0, publishedVersionIds: [] }, renderRetries: 0, meter: async () => ({ ok: true, remaining: Infinity }), refund: async () => undefined, urlSuffix: "" });
     const fa = new FakeClient();

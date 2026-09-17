@@ -23,6 +23,8 @@ export const config = {
   },
   model: {
     id: str("ARBITER_MODEL", "claude-opus-5"),
+    /** single-author edit turns run here; "same"/"off" = use id for everything */
+    editModel: str("ARBITER_EDIT_MODEL", "claude-sonnet-5").replace(/^(off|same|none)$/i, ""),
     effort: str("ARBITER_EFFORT", "medium") as Effort,
     fastMode: str("ARBITER_FAST_MODE", "0") === "1",
     maxIterations: num("ARBITER_MAX_ITERATIONS", 8),

@@ -44,7 +44,7 @@ src/orchestrator.ts       the hub: per-thread queue, message batching, votes, ap
 src/agent/prompts.ts      SYSTEM_PROMPT (byte-stable, cached) + buildTurnContent (per-turn context from state)
 src/agent/tools.ts        tool schemas + executors: publish_version, fork_variants, ask, log_decision, add_constraint,
                           study_reference, set_style, say, post_handoff, remember_for_brand
-src/agent/run.ts          Claude tool loop (beta namespace), typed errors, auto-degrade if optional betas are rejected
+src/agent/run.ts          Claude tool loop (beta namespace), model tiers, two cache breakpoints, usage per turn, per-model degrade
 src/surface.ts            the Surface interface: everything the agent needs from "the place it lives"
 src/discord/{bot,surface,ui,commands,register,errors,people}.ts
 src/render/server.ts      Express: /p/<thread>/<v>, /p/<thread>/current, /p/<thread>/compare/<a>/<b>, /live/<thread> (SSE), /live index
@@ -87,12 +87,22 @@ arrives as a pair. While a turn runs, new messages queue for the next one. One t
 
 ## Model configuration
 
-`claude-opus-5` by default (`ARBITER_MODEL`), `effort=medium` (`ARBITER_EFFORT`), adaptive thinking by
-omission (do not add a `thinking` param, never `budget_tokens`). `ARBITER_FAST_MODE=1` enables Opus
-fast mode for demos. Server-side refusal fallbacks are on by default via beta headers; if the API
-returns a 400 for an optional beta the agent retries without them and stays degraded for the process.
-The voice relevance gate uses `claude-haiku-4-5`. Everything goes through `client.beta.messages.stream`.
-Prompt caching: system prompt has a cache breakpoint; message history is not yet cached (see Roadmap).
+Two tiers. `ARBITER_MODEL` (`claude-opus-5`) runs kickoff, forks, fork winners, and any feedback batch
+with more than one author (that is where conflicts are). `ARBITER_EDIT_MODEL` (`claude-sonnet-5`) runs
+the rest: one person's feedback on an existing page. `tierFor()` in the orchestrator decides; set
+`ARBITER_EDIT_MODEL=same` to use one model. `effort=medium` (`ARBITER_EFFORT`), adaptive thinking by
+omission (do not add a `thinking` param, never `budget_tokens`). Everything goes through
+`client.beta.messages.stream`. The voice relevance gate uses `claude-haiku-4-5`.
+
+`ARBITER_FAST_MODE=1` (Opus fast mode, for demos) and server-side refusal fallbacks are Opus-only betas:
+`requestExtras()` attaches them by model, never to Sonnet. If the API returns a 400 for one, that model
+retries without them and stays degraded for the process; the other model is unaffected.
+
+Prompt caching: two breakpoints per request. The explicit one on the system prompt pins the tools +
+system prefix across turns; the top-level `cache_control` moves with the last message, so iterations
+2..n of a turn read the transcript, current HTML and earlier tool results from cache. Token usage is
+summed per turn into `lastTurn.usage`, shown by `/status` ("Last turn: … tokens in (… from cache)") and
+on the terminal `turn done` line. `cached=0` on every iteration means something in the prefix changes.
 
 ## How to add things
 
@@ -126,6 +136,14 @@ Prompt caching: system prompt has a cache breakpoint; message history is not yet
   9–11 were added. Keep them.
 - ElevenLabs key needs Speech to Text and Text to Speech permissions. Discord's own voice activity
   detection already trims silence; the noise you hear is real speech fragments, hence the relevance gate.
+- Playwright calls a route handler for the first request only: a continued request's redirects are
+  followed without the handler. The external-site filter in `screenshot.ts` fetches with redirects off
+  and checks each hop itself, then fulfills the final response. Iframes and sub-resources are routed.
+- `new URL("https://x.ngrok.app").port` is `""`, so a `localhost:${port || 80}` fallback sent every
+  screenshot to port 80 whenever `PUBLIC_BASE_URL` was set. Screenshots go through `localBase()`.
+- The Agent once kept the active client in a field; two servers' turns at once swapped keys mid-turn.
+  The client is a parameter of every call.
+- Fast mode and the refusal-fallback beta are Opus-only; sending them to Sonnet is a 400.
 
 ## Working with Phin
 
@@ -137,8 +155,9 @@ rather than the code (firewall, permissions, a stale process), say so plainly.
 
 ## Roadmap (agreed)
 
-1. Prompt-cache the message history within a turn (cache breakpoint on the last user message) and
-   run edit turns on Sonnet 5 with Opus for kickoff and forks: roughly halves cost per session.
+1. Done 17 Sep: history cached within a turn, Sonnet 5 on single-author edit turns. Still to do:
+   measure on a real session (`/status` and the `turn done` line show tokens) and check Sonnet keeps
+   the prompt rules on edits (one message, no re-asking).
 2. Productize: base fee + render credits (one credit per version or fork variant), per-server settings
    and optional bring-your-own-key, usage counter, privacy policy + terms (Discord requires them past
    100 servers), state in a database instead of files.

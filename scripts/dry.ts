@@ -34,6 +34,7 @@ async function main(): Promise<void> {
   const shots = new Screenshotter(config.server.chromiumPath);
   const agent = new Agent(new Anthropic(), {
     model: config.model.id,
+    editModel: config.model.editModel || undefined,
     effort: config.model.effort,
     fastMode: config.model.fastMode,
     maxIterations: config.model.maxIterations,
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
 
   const threadId = `dry_${Date.now().toString(36)}`;
   const referenceUrl = /(https?:\/\/\S+)/.exec(brief)?.[1];
-  console.log(`model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
+  console.log(`model=${config.model.id} edits=${config.model.editModel || "same"} effort=${config.model.effort} fast=${config.model.fastMode} · state in ${config.dataDir}/projects/${threadId}`);
   const url = `http://localhost:${port}/live/${threadId}`;
   const bar = "═".repeat(Math.max(40, url.length + 20));
   console.log(`\n╔${bar}╗\n║  📺 Live canvas:  ${url}${" ".repeat(Math.max(0, bar.length - url.length - 19))}║\n║  All sessions:    http://localhost:${port}/live${" ".repeat(Math.max(0, bar.length - `http://localhost:${port}/live`.length - 19))}║\n╚${bar}╝\n`);

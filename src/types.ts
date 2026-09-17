@@ -155,7 +155,7 @@ export interface Project {
   /** version id a nudge was already sent for */
   nudgedFor?: string;
   /** persisted so any process (and the live canvas) can show what the agent is doing or why it failed */
-  lastTurn?: { startedAt: string; endedAt?: string; reason: string; error?: string; toolCalls?: number; ms?: number };
+  lastTurn?: { startedAt: string; endedAt?: string; reason: string; error?: string; toolCalls?: number; ms?: number; model?: string; usage?: TurnUsage };
   /** set while Arbiter is listening in a voice channel for this thread */
   voice?: { channelId: string; channelName: string; since: string; mode?: "listen" | "address" };
 }
@@ -170,10 +170,21 @@ export interface TurnInput {
   project: Project;
   reason: TurnReason;
   images: ImageInput[];
+  /** "edit" = one person's feedback on an existing page (cheaper model); "full" = kickoff, forks, fork winners, multi-author batches */
+  tier?: "full" | "edit";
   /** HTML of the current version, if any (the model edits from this) */
   currentHtml?: string;
   /** the server's brand memory, if this project is bound to one */
   brand?: Brand;
+}
+
+/** token counts summed over every call in a turn */
+export interface TurnUsage {
+  /** uncached input tokens */
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface TurnResult {
@@ -183,6 +194,8 @@ export interface TurnResult {
   publishedVersionIds: string[];
   forkOpened?: string;
   error?: string;
+  model?: string;
+  usage?: TurnUsage;
 }
 
 export function nowIso(): string {

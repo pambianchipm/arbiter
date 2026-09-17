@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   const anthropic = new Anthropic();
   const agent = new Agent(anthropic, {
     model: config.model.id,
+    editModel: config.model.editModel || undefined,
     effort: config.model.effort,
     fastMode: config.model.fastMode,
     maxIterations: config.model.maxIterations,
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
   } catch (e) {
     throw new Error(explainDiscordError(e));
   }
-  log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
+  log.info(`arbiter up · model=${config.model.id} edits=${config.model.editModel || "same"} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
   log.info(`product · metering=${config.product.metering} previewTokens=${config.product.previewTokens} byok=${config.product.secret ? "enabled" : "off (set ARBITER_SECRET)"} maxRenders=${config.product.maxConcurrentRenders}`);
   log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"} · mode=${config.voice.mode} · gate=${gate ? config.voice.gateModel : "off"} · batch=${config.voice.debounceMs}ms`);
   if (stt) log.info("voice dependency report:\n" + generateDependencyReport());

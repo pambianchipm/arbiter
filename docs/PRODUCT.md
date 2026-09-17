@@ -102,6 +102,10 @@ Render metering in the tools with monthly reset, `/plan`, bring-your-own-key via
 AES-256-GCM at rest, tokened preview and canvas URLs, hidden session index behind `ADMIN_TOKEN`,
 private-address guard on `study_reference`, `/forget`, a render concurrency cap, and `/privacy` +
 `/terms` served from `docs/legal`. All behind env flags; see README "Running it as a product".
+
+17 Sep: the hosted-mode bugs found on review (renders behind a public URL, BYOK key isolation, double
+charge on a bounced render, redirect/iframe SSRF, `/current?k=` links, weak tokens, stale `/plan`) and
+the week-2 cost work (cached history within a turn, Sonnet 5 on edit turns, token usage on `/status`).
 Remaining from the list: hosting itself, Stripe checkout + webhook, retention job, the DB move.
 
 ## 10. Order of work
