@@ -97,7 +97,12 @@ PUBLIC_BASE_URL=https://xyz.ngrok.app npm run dev
 
 Everything below is off by default so local dev and demos are unchanged. Turn it on when the bot serves strangers:
 
-- `METERING=1` enforces render allowances per server: **free** (3/month), **team** (40/month), or **byok** (unlimited on the server's own key). A render is one version or one fork variant; the tools spend credits and, when a server is out, the agent says so and points at `/plan`. Plans live in `data/guilds/<id>.json`; wire `UPGRADE_URL` to your Stripe checkout page.
+- **Step-by-step: `docs/GO-LIVE.md`** (Railway, Stripe dashboard, Discord portal, test purchase).
+- `METERING=1` enforces render allowances per server: **free** (3/month), **team** (40/month), plus **render packs** that never expire, or unlimited on the server's own key. A render is one version or one fork variant; the tools spend credits and, when a server is out, the agent says so and points at `/plan`. Plans live in `data/guilds/<id>.json`.
+- **Stripe billing is built in.** With the `STRIPE_*` variables set, `/plan` posts a signed upgrade link → upgrade page → Stripe Checkout (Team subscription or pack, promotion codes on) → webhook updates the server and posts a confirmation in the channel it came from. Renewals reset the allowance; cancellations drop to Free and keep packs; "Manage billing" opens the Stripe customer portal. Webhooks are signature-checked and idempotent.
+- `/` serves a landing page with an **Add to Discord** button and pricing (Stripe and Discord both want one). Drop a file at `web/landing.html` to replace it, e.g. one designed in Arbiter; `{{INVITE_URL}}`, `{{PRICE_TEAM}}` and friends are filled in. `/home` shows it in local dev too.
+- New servers get a welcome message with the three-step how-to; `/help` repeats it. Idle Free sessions are deleted after `RETENTION_DAYS`.
+- Deploy: `Dockerfile` (Playwright base image) + `railway.json` (one replica, `/health` check). `npm run build && npm run start:prod` runs the compiled build.
 - `/setup key:<sk-ant-…>` lets a server bring its own Anthropic key (Manage Server only). Set `ARBITER_SECRET`; keys are encrypted at rest and never echoed.
 - `PREVIEW_TOKENS=1` (automatic when `PUBLIC_BASE_URL` is set) puts an unguessable key on every preview and canvas URL, and hides the session index unless `?admin=<ADMIN_TOKEN>`.
 - `study_reference` refuses private and internal addresses, so it can't be pointed at localhost or cloud metadata.
@@ -123,6 +128,7 @@ Nobody points Arbiter at a GitHub repo or a laptop. It is a bot process plus a s
 | `/constraint <text>` | Hard constraint every future version must respect. |
 | `/status` · `/handoff [stack]` | Where things stand · post the spec, BUILD.md and source. |
 | `/voice join` · `/voice leave` | Listen in your voice channel; every utterance becomes attributed feedback. |
+| `/help` · `/plan` · `/setup` · `/forget` | How-to · plan and upgrade link · your own Anthropic key · delete a session. |
 | `/brand show` · `/brand new` · `/brand use` | The server's design memory and site map. |
 | Any message in the thread | Feedback. Attach an annotated screenshot if you like. |
 | ✅ Approve · ✏️ Feedback · 📦 Handoff | Buttons on every version. Everyone approving = shipped. |
@@ -168,5 +174,8 @@ CLAUDE.md              operating manual for Claude working in this repo · docs/
   store.ts             atomic JSON + files per project
   handoff.ts           deterministic spec generator
   brand.ts             chrome extraction, absorbing shipped pages into brand memory
+  billing.ts           Stripe: signed upgrade links, checkout, customer portal, webhook
+  web/pages.ts         landing, upgrade and result pages
+  net.ts · crypto.ts   private-address guard · AES-GCM for saved keys
 scripts/               smoke test, dry-run REPL, console surface
 ```

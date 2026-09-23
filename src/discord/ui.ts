@@ -138,3 +138,25 @@ export function chunk(text: string, size = 1900): string[] {
   if (rest) out.push(rest);
   return out;
 }
+
+
+export function welcomeEmbed(info: { metering: boolean; freeRenders: number }): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(COLORS.version)
+    .setTitle("👋 Arbiter is here")
+    .setDescription(
+      "I'm a design agent for your team. Describe a page, I build a live prototype in about a minute, and everyone iterates in the thread. When two of you want opposite things, I build both and you vote.",
+    )
+    .addFields(
+      { name: "1 · Start", value: "`/design brief: landing page for …` in any channel. Attach a whiteboard photo or add a site to borrow the feel from." },
+      { name: "2 · Iterate", value: "Reply in the thread, or `/voice join` and talk. Tell me roles with `/role designer|pm|eng` so questions go to the right person." },
+      { name: "3 · Ship", value: "✅ Approve when it's right, then 📦 Handoff for a zip your coding agent can build from. Approved pages teach me your brand." },
+      {
+        name: "Plan",
+        value: info.metering
+          ? `Free includes ${info.freeRenders} renders a month (a render is one version or A/B variant). \`/plan\` to upgrade, or \`/setup\` to use your own Anthropic key for unlimited.`
+          : "Renders are unlimited on this Arbiter.",
+      },
+    )
+    .setFooter({ text: "/help shows this again · /forget deletes a session" });
+}

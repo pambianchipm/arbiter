@@ -28,7 +28,12 @@ npm run dev                 # bot + preview server (tsx watch)
 npm run dry -- "brief"      # real model, console thread, no Discord. Best way to iterate on the prompt.
 npm run smoke               # end-to-end with a scripted fake model: renderer, votes, gates, brand, zip. No API key.
 npm run typecheck
+npm run build && npm run start:prod   # the compiled build production runs (Dockerfile does this)
 ```
+
+Production runs on Railway from the `Dockerfile` with a volume at `/data`; the full go-live runbook
+(Railway, Stripe dashboard, Discord portal, test purchase) is `docs/GO-LIVE.md`. Billing is on only
+when all `STRIPE_*` variables and `ARBITER_SECRET` are set; metering only with `METERING=1`.
 
 `tsx watch` restarts on file changes but **not** on new dependencies or gateway-intent changes:
 after `npm install` or touching `createDiscordClient()`, stop and start the bot by hand.
@@ -53,6 +58,10 @@ src/store.ts              atomic JSON + files, per-project save serialization, c
 src/brand.ts              chrome extraction and absorbing shipped pages into brand memory
 src/handoff.ts            handoff.md, BUILD.md, brand.md, and the zip
 src/voice/{manager,stt,tts,gate,audio}.ts   voice session per thread, ElevenLabs/OpenAI STT, ElevenLabs TTS, noise + relevance gates
+src/billing.ts            Stripe checkout, portal, webhook; signed upgrade links (HMAC with ARBITER_SECRET)
+src/web/pages.ts          landing (overridable by web/landing.html), upgrade, result pages
+src/net.ts, src/crypto.ts private-address guard for study_reference; AES-256-GCM for bring-your-own keys
+Dockerfile, railway.json  production image (Playwright base) and Railway config
 scripts/smoke.ts          the test. scripts/dry.ts the REPL. scripts/console-surface.ts a Surface that prints.
 docs/PITCH.md             judging map + demo script. docs/BRIEFING.md handoff narrative.
 ```
@@ -84,6 +93,12 @@ arrives as a pair. While a turn runs, new messages queue for the next one. One t
 7. **Smoke must pass before pushing.** `npm run smoke`. Add an assertion for anything you fix.
 8. **Slash-command descriptions ≤ 100 chars.** Discord validates at import; the smoke test checks.
 9. **Pure-JS voice deps only** (`opusscript`, not `@discordjs/opus`): Phin runs Node 25.
+10. **Never run a local bot with the production token.** Local dev uses a separate "Arbiter Dev"
+    application. Two processes on one token both answer everything. Railway runs exactly one replica.
+11. **Billing is webhook-driven and idempotent.** Plan changes happen only in the `billing*` methods on
+    the orchestrator, called from `src/billing.ts` after signature verification; each Stripe event id is
+    applied once. Don't grant renders anywhere else.
+12. **`ARBITER_SECRET` is permanent** once live: it encrypts saved keys and signs upgrade links.
 
 ## Model configuration
 
@@ -122,6 +137,9 @@ Prompt caching: system prompt has a cache breakpoint; message history is not yet
   fix an existing bot via Server Settings → Roles or re-run the invite URL.
 - Discord voice needs UDP; there is no TCP fallback. macOS firewall prompts for `node` the first time.
 - Writing two full HTML documents in one `fork_variants` call can truncate; a side may `reuse_version`.
+- On a hosted box the public URL isn't localhost: screenshots must go to the local listener
+  (`localBase()` in tools.ts). An early version derived the port from the public URL and would have
+  screenshotted port 80 in production; the smoke test now renders through a public base URL.
 - The model re-asked open questions and posted three messages on "looks good" until the prompt rules
   9–11 were added. Keep them.
 - ElevenLabs key needs Speech to Text and Text to Speech permissions. Discord's own voice activity

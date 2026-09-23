@@ -104,6 +104,13 @@ private-address guard on `study_reference`, `/forget`, a render concurrency cap,
 `/terms` served from `docs/legal`. All behind env flags; see README "Running it as a product".
 Remaining from the list: hosting itself, Stripe checkout + webhook, retention job, the DB move.
 
+**Update 23 Sep:** Stripe checkout, customer portal and webhook (idempotent, signature-checked),
+render packs, signed upgrade links, landing page, welcome message + `/help`, retention sweep, and the
+Railway `Dockerfile`/`railway.json` are built and tested. The runbook is `docs/GO-LIVE.md`. What's left
+is dashboard work (Railway, Stripe, Discord portal), then onboarding polish and the DB move.
+Launch decision: bring-your-own-key is free and unlimited (it costs us only hosting); flip it to a
+paid tier later if it's abused.
+
 ## 10. Order of work
 
 1. Hosting, domain, SSRF guard, URL tokens, render semaphore, supervision, logs. (2 days)

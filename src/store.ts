@@ -164,6 +164,27 @@ export class Store {
     await atomicWrite(path.join(this.dir, "guilds", `${safe(g.guildId)}.json`), JSON.stringify(g, null, 2));
   }
 
+  async listGuilds(): Promise<GuildSettings[]> {
+    try {
+      const names = (await fs.readdir(path.join(this.dir, "guilds"))).filter((f) => f.endsWith(".json"));
+      const out: GuildSettings[] = [];
+      for (const f of names) {
+        try {
+          out.push(JSON.parse(await fs.readFile(path.join(this.dir, "guilds", f), "utf8")) as GuildSettings);
+        } catch {
+          /* skip unreadable */
+        }
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  async findGuildByCustomer(customerId: string): Promise<GuildSettings | undefined> {
+    return (await this.listGuilds()).find((g) => g.stripeCustomerId === customerId);
+  }
+
   async deleteProject(id: string): Promise<void> {
     this.cache.delete(id);
     await fs.rm(this.projectDir(id), { recursive: true, force: true });

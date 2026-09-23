@@ -121,9 +121,16 @@ export interface GuildSettings {
   plan: Plan;
   rendersRemaining: number;
   renewsAt: string;
+  /** pack renders: spent after the monthly allowance, never reset */
+  bonusRenders?: number;
   /** encrypted with ARBITER_SECRET; never logged or echoed */
   byokKeyEnc?: string;
   stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  /** last Stripe event ids applied, for idempotent webhooks */
+  stripeEvents?: string[];
+  /** set once the welcome message has been posted */
+  welcomedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

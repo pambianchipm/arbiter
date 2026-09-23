@@ -21,7 +21,7 @@ import type { Orchestrator } from "../orchestrator.js";
 import type { VoiceManager } from "../voice/manager.js";
 import type { ImageInput, Role } from "../types.js";
 import { displayName, inferRole } from "./people.js";
-import { approvalsFooter, feedbackModal } from "./ui.js";
+import { approvalsFooter, feedbackModal, welcomeEmbed } from "./ui.js";
 import { registerCommands } from "./register.js";
 import { log, errMsg } from "../log.js";
 import { explainDiscordError } from "./errors.js";
@@ -83,6 +83,20 @@ export function attachHandlers(client: Client, orch: Orchestrator, voice?: Voice
     } catch (e) {
       log.error(errMsg(e));
     }
+  });
+
+  // First join: post a short how-to where people will see it.
+  client.on(Events.GuildCreate, (guild) => {
+    void (async () => {
+      if (!(await orch.markWelcomed(guild.id))) return;
+      const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+      const canPost = (ch: unknown): ch is import("discord.js").TextChannel =>
+        Boolean(ch && (ch as import("discord.js").TextChannel).type === ChannelType.GuildText && me && (ch as import("discord.js").TextChannel).permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks]));
+      const target = canPost(guild.systemChannel) ? guild.systemChannel : guild.channels.cache.filter((c) => canPost(c)).sort((a, b) => ("position" in a && "position" in b ? (a.position as number) - (b.position as number) : 0)).first();
+      if (!target || !canPost(target)) return;
+      await target.send({ embeds: [welcomeEmbed(orch.productInfo())] });
+      log.info(`welcomed ${guild.name} (${guild.id}) in #${target.name}`);
+    })().catch((e) => log.warn("welcome:", explainDiscordError(e)));
   });
 
   client.on(Events.MessageCreate, (m) => {
@@ -241,12 +255,16 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       await i.reply({ content: text, flags: MessageFlags.Ephemeral });
       return;
     }
+    case "help": {
+      await i.reply({ embeds: [welcomeEmbed(orch.productInfo())], flags: MessageFlags.Ephemeral });
+      return;
+    }
     case "plan": {
       if (!i.guildId) {
         await i.reply({ content: "Plans are per server.", flags: MessageFlags.Ephemeral });
         return;
       }
-      await i.reply({ content: await orch.planText(i.guildId), flags: MessageFlags.Ephemeral });
+      await i.reply({ content: await orch.planText(i.guildId, i.channelId ?? undefined), flags: MessageFlags.Ephemeral });
       return;
     }
     case "setup": {

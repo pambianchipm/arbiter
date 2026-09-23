@@ -28,6 +28,7 @@ export const commands = [
     .setDescription("Post the handoff: decision log, constraints, final source, and BUILD.md for a coding agent")
     .addStringOption((o) => o.setName("stack").setDescription("Target stack for BUILD.md, e.g. 'Next.js + Tailwind + shadcn'").setMaxLength(120)),
   new SlashCommandBuilder().setName("status").setDescription("Where this design session stands"),
+  new SlashCommandBuilder().setName("help").setDescription("How to use Arbiter: start a session, iterate, vote, ship"),
   new SlashCommandBuilder().setName("plan").setDescription("This server's plan, renders left, and how to add more"),
   new SlashCommandBuilder()
     .setName("setup")

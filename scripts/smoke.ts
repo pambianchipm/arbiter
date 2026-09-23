@@ -335,6 +335,137 @@ async function main(): Promise<void> {
     await store.save(tp);
   }
 
+  // ---- Billing: signed upgrade page, checkout, webhook (real Stripe signatures), idempotency, packs, renewal, cancel
+  console.log("\n▶ billing");
+  {
+    const StripeMod = (await import("stripe")).default;
+    const real = new StripeMod("sk_test_dummy");
+    const created: Record<string, unknown>[] = [];
+    const fakeStripe = {
+      checkout: { sessions: { create: async (p: Record<string, unknown>) => (created.push(p), { url: "https://checkout.stripe.test/c/pay_123" }) } },
+      billingPortal: { sessions: { create: async () => ({ url: "https://billing.stripe.test/p/1" }) } },
+      webhooks: real.webhooks,
+    };
+    const billOrch = new Orchestrator(store, shots, surface, agent, {
+      baseUrl,
+      debounceMs: 200,
+      nudgeMinutes: 0,
+      forkTimeoutMinutes: 0,
+      product: { metering: true, freeRenders: 3, teamRenders: 40, packRenders: 20, secret: "bill-secret", previewTokens: false },
+    });
+    const expressMod = (await import("express")).default;
+    const { mountBilling, billingLink } = await import("../src/billing.js");
+    const app = expressMod();
+    const notes: string[] = [];
+    const site = { inviteUrl: "https://discord.com/oauth2/authorize?client_id=1", freeRenders: 3, teamRenders: 40, packRenders: 20, teamPrice: "$12 / month", packPrice: "$5" };
+    mountBilling(app, {
+      stripe: fakeStripe,
+      webhookSecret: "whsec_test",
+      secret: "bill-secret",
+      baseUrl: "https://arbiter.test",
+      prices: { team: "price_team", pack: "price_pack" },
+      site,
+      orch: billOrch,
+      guildName: async () => "Test Server",
+      notify: async (g, c, t) => void notes.push(`${g}|${c ?? ""}|${t}`),
+    });
+    const bsrv = await listen(app, 0);
+    const B = `http://localhost:${(bsrv.address() as AddressInfo).port}`;
+    const G = "111111111111111111";
+    const C = "222222222222222222";
+    const link = billingLink(B, "bill-secret", G, C);
+    const up = await fetch(link);
+    const upHtml = await up.text();
+    assert(up.status === 200 && upHtml.includes("Upgrade Test Server") && upHtml.includes("Subscribe") && upHtml.includes("Buy a pack"), "signed upgrade page renders plans for the server");
+    assert((await fetch(link.replace(/s=[^&]+/, "s=AAAAAAAAAAAAAAAAAAAAAA"))).status === 403, "tampered upgrade link → 403");
+    const sig = new URL(link).searchParams.get("s")!;
+    const co = await fetch(`${B}/checkout`, { method: "POST", body: new URLSearchParams({ g: G, c: C, s: sig, item: "team" }), redirect: "manual" });
+    const c0 = created[0] as { mode: string; metadata: Record<string, string>; line_items: { price: string }[]; allow_promotion_codes: boolean; success_url: string };
+    assert(co.status === 303 && co.headers.get("location") === "https://checkout.stripe.test/c/pay_123", "checkout redirects to Stripe");
+    assert(c0.mode === "subscription" && c0.metadata.guildId === G && c0.metadata.channelId === C && c0.line_items[0].price === "price_team" && c0.allow_promotion_codes && c0.success_url.startsWith("https://arbiter.test/upgrade/done"), "checkout session carries the server, channel, price and promo codes");
+
+    const hook = async (ev: unknown, secret = "whsec_test") => {
+      const payload = JSON.stringify(ev);
+      const header = real.webhooks.generateTestHeaderString({ payload, secret });
+      return fetch(`${B}/stripe/webhook`, { method: "POST", headers: { "stripe-signature": header, "content-type": "application/json" }, body: payload });
+    };
+    const teamDone = { id: "evt_team", type: "checkout.session.completed", data: { object: { mode: "subscription", payment_status: "paid", customer: "cus_1", subscription: "sub_1", client_reference_id: G, metadata: { guildId: G, channelId: C, item: "team" } } } };
+    assert((await hook(teamDone)).status === 200, "webhook accepts a correctly signed event");
+    let gs = await store.getGuild(G, { plan: "free", renders: 3 });
+    assert(gs.plan === "team" && gs.rendersRemaining === 40 && gs.stripeCustomerId === "cus_1" && gs.stripeSubscriptionId === "sub_1", "subscription checkout → Team plan with 40 renders");
+    assert(notes.length === 1 && notes[0].startsWith(`${G}|${C}|`) && notes[0].includes("Team"), "confirmation posted to the channel the upgrade came from");
+    await hook(teamDone);
+    assert(notes.length === 1, "replayed event is ignored (idempotent)");
+    assert((await hook(teamDone, "whsec_wrong")).status === 400, "bad signature → 400");
+    await hook({ id: "evt_pack", type: "checkout.session.completed", data: { object: { mode: "payment", payment_status: "paid", customer: "cus_1", metadata: { guildId: G, channelId: C, item: "pack" } } } });
+    gs = await store.getGuild(G, { plan: "free", renders: 3 });
+    assert(gs.bonusRenders === 20, "pack adds 20 renders");
+    gs.rendersRemaining = 1;
+    await store.saveGuild(gs);
+    const spent = await billOrch.consumeRenders(G, 2);
+    gs = await store.getGuild(G, { plan: "free", renders: 3 });
+    assert(spent.ok && gs.rendersRemaining === 0 && gs.bonusRenders === 19, "monthly allowance is spent before pack renders");
+    await hook({ id: "evt_renew", type: "invoice.paid", data: { object: { customer: "cus_1", billing_reason: "subscription_cycle" } } });
+    gs = await store.getGuild(G, { plan: "free", renders: 3 });
+    assert(gs.rendersRemaining === 40 && gs.bonusRenders === 19, "renewal resets the monthly allowance, keeps pack renders");
+    const portal = await fetch(`${B}/billing/portal`, { method: "POST", body: new URLSearchParams({ g: G, c: C, s: sig }), redirect: "manual" });
+    assert(portal.status === 303 && portal.headers.get("location") === "https://billing.stripe.test/p/1", "billing portal redirect for a paying server");
+    await hook({ id: "evt_cancel", type: "customer.subscription.deleted", data: { object: { customer: "cus_1" } } });
+    gs = await store.getGuild(G, { plan: "free", renders: 3 });
+    assert(gs.plan === "free" && gs.rendersRemaining === 3 && gs.bonusRenders === 19 && notes.some((n) => n.includes("has ended")), "cancel → Free, packs kept, server told");
+    bsrv.close();
+  }
+
+  // ---- Hosted mode: landing page, legal contact, render through a public base URL, retention, welcome
+  console.log("\n▶ hosted mode");
+  {
+    const { landingPage } = await import("../src/web/pages.js");
+    const site = { inviteUrl: "https://discord.com/oauth2/authorize?client_id=42&scope=bot+applications.commands&permissions=1", contactEmail: "hi@arbiter.test", freeRenders: 3, teamRenders: 40, packRenders: 20, teamPrice: "$12 / month", packPrice: "$5" };
+    const hsrv = await listen(createPreviewServer(store, { tokens: true, adminToken: "adm", legalDir: "docs/legal", contactEmail: "hi@arbiter.test", landing: () => landingPage(site, "does-not-exist.html") }), 0);
+    const H = `http://localhost:${(hsrv.address() as AddressInfo).port}`;
+    const land = await fetch(`${H}/`);
+    const landHtml = await land.text();
+    assert(land.status === 200 && landHtml.includes("client_id=42") && landHtml.includes("$12 / month") && landHtml.includes("/privacy"), "landing page at / with invite link, pricing and legal links");
+    assert((await (await fetch(`${H}/terms`)).text()).includes("hi@arbiter.test"), "legal pages show the contact email");
+    hsrv.close();
+
+    const hosted = new Orchestrator(store, shots, surface, agent, {
+      baseUrl: "https://arbiter.example",
+      debounceMs: 200,
+      nudgeMinutes: 0,
+      forkTimeoutMinutes: 0,
+      product: { metering: true, freeRenders: 3, teamRenders: 40, secret: "s", previewTokens: true, retentionDays: 30 },
+    });
+    fake.push(
+      msg([toolUse("publish_version", { html: HTML_V1, summary: "Hosted render", changes: [], addresses: ["Ana"] })], "tool_use"),
+      msg([text("Up.")], "end_turn"),
+    );
+    const hid = "thread_hosted";
+    await hosted.startProject({ threadId: hid, channelId: "chan", guildId: "hosted-guild", brief: "hosted page", createdBy: { id: "u_ana", name: "Ana", role: "pm" } });
+    await waitFor("hosted kickoff", async () => (await store.load(hid))?.turnCount === 1);
+    const hp = (await store.load(hid))!;
+    const hv = hp.versions[0];
+    assert(hv && hv.previewUrl.startsWith("https://arbiter.example/p/thread_hosted/v1?k=") && (await store.readPng(hid, "v1"))!.length > 10_000, "render works when the public URL isn't localhost (screenshot via local listener, tokened link)");
+    assert((await store.getGuild("hosted-guild", { plan: "free", renders: 3 })).rendersRemaining === 2, "the render was metered");
+
+    const old = { ...hp, id: "thread_old", threadId: "thread_old", guildId: "hosted-guild", createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString(), transcript: [] };
+    await store.save(old);
+    const paidOld = { ...old, id: "thread_old_paid", threadId: "thread_old_paid", guildId: "paid-guild" };
+    await store.save(paidOld);
+    const pg = await store.getGuild("paid-guild", { plan: "free", renders: 3 });
+    pg.plan = "team";
+    await store.saveGuild(pg);
+    const removed = await hosted.sweepRetention();
+    assert(removed === 1 && !(await new Store(dataDir).load("thread_old")) && (await store.load("thread_old_paid")), "retention deletes idle free sessions, keeps paid ones");
+    await store.deleteProject("thread_old_paid");
+    await store.deleteProject(hid);
+
+    assert((await hosted.markWelcomed("welcome-guild")) && !(await hosted.markWelcomed("welcome-guild")), "welcome message posts once per server");
+    const { welcomeEmbed } = await import("../src/discord/ui.js");
+    const we = welcomeEmbed({ metering: true, freeRenders: 3 }).toJSON();
+    assert(we.fields?.length === 4 && we.fields.every((f) => f.value.length <= 1024), "welcome embed is valid for Discord");
+  }
+
   // ---- Restart survives: fresh store loads state from disk
   const store2 = new Store(dataDir);
   const reloaded = await store2.load(threadId);

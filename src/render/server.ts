@@ -20,6 +20,10 @@ export interface PreviewOptions {
   adminToken?: string;
   /** markdown files served at /privacy and /terms */
   legalDir?: string;
+  /** replaces "[your contact email]" in the legal pages */
+  contactEmail?: string;
+  /** the public landing page (served at / when hosted, and at /home always) */
+  landing?: () => Promise<string>;
 }
 
 export function createPreviewServer(store: Store, opts: PreviewOptions = {}): express.Express {
@@ -45,7 +49,8 @@ export function createPreviewServer(store: Store, opts: PreviewOptions = {}): ex
       return;
     }
     try {
-      const md = await fs.readFile(path.join(opts.legalDir, `${name}.md`), "utf8");
+      let md = await fs.readFile(path.join(opts.legalDir, `${name}.md`), "utf8");
+      if (opts.contactEmail) md = md.split("[your contact email]").join(opts.contactEmail);
       res.type("html").send(mdPage(md));
     } catch {
       res.status(404).type("text/plain").send("not found");
@@ -157,8 +162,20 @@ export function createPreviewServer(store: Store, opts: PreviewOptions = {}): ex
   });
 
   // Index: every session with a link to its live canvas. Also answers a bare /live.
+  app.get("/home", async (_req, res) => {
+    if (!opts.landing) {
+      res.status(404).type("text/plain").send("no landing page configured");
+      return;
+    }
+    res.type("html").send(await opts.landing());
+  });
+
   app.get(["/", "/live"], async (req, res) => {
     if (opts.tokens && (!opts.adminToken || req.query.admin !== opts.adminToken)) {
+      if (req.path === "/" && opts.landing) {
+        res.type("html").send(await opts.landing());
+        return;
+      }
       res.status(404).type("html").send(`<!doctype html><meta charset="utf-8"><title>Arbiter</title><body style="font-family:system-ui;background:#0f1115;color:#e6e8ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>Arbiter</h1><p>The design agent that settles the argument. Sessions live in Discord; open the link Arbiter posted in your thread.</p><p><a href="/privacy" style="color:#9aa3b2">Privacy</a> · <a href="/terms" style="color:#9aa3b2">Terms</a></p></div></body>`);
       return;
     }

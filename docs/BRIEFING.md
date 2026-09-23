@@ -77,6 +77,14 @@ bug he hit became a self-explaining error in the product (port in use, no API ke
 intent, missing permission, wrong page captured), plus a smoke assertion. Keep doing that:
 when a failure is only visible in the terminal, surface it where he is looking.
 
+## Update 23 Sep
+
+The product layer and billing are built: metering, packs, BYOK, Stripe checkout/portal/webhook, landing
+page, welcome message, retention, Dockerfile and railway.json. Phin is deploying to Railway and setting
+up Stripe from `docs/GO-LIVE.md`. The next agreed piece of work is an onboarding UI/UX pass: one-click
+"start a session" from the welcome message, a better landing page (ideally designed in Arbiter itself
+and dropped in as `web/landing.html`), and first-session hints.
+
 ## Next actions, in order
 
 1. Confirm the noise fixes in a real call (`/voice join mode:address`), tune `VOICE_*` if needed.

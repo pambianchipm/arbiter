@@ -18,7 +18,20 @@ export interface OrchestratorConfig {
   /** longer window for spoken feedback so a whole exchange lands in one turn */
   voiceDebounceMs?: number;
   /** commercial settings; metering off = unlimited (local dev, demos) */
-  product?: { metering: boolean; freeRenders: number; teamRenders: number; upgradeUrl?: string; secret?: string; previewTokens: boolean };
+  product?: {
+    metering: boolean;
+    freeRenders: number;
+    teamRenders: number;
+    upgradeUrl?: string;
+    secret?: string;
+    previewTokens: boolean;
+    /** renders added by one pack purchase */
+    packRenders?: number;
+    /** builds a signed upgrade link for a server (set when Stripe is configured) */
+    billingLink?: (guildId: string, channelId?: string) => string;
+    /** delete free-plan sessions idle for this many days (0 = never) */
+    retentionDays?: number;
+  };
   nudgeMinutes: number;
   forkTimeoutMinutes: number;
 }
@@ -98,18 +111,35 @@ export class Orchestrator {
   async consumeRenders(guildId: string | undefined, n: number): Promise<{ ok: boolean; remaining: number; reason?: string }> {
     if (!this.product.metering || !guildId) return { ok: true, remaining: Number.POSITIVE_INFINITY };
     const g = await this.guild(guildId);
-    if (g.plan === "byok" && g.byokKeyEnc) return { ok: true, remaining: Number.POSITIVE_INFINITY };
+    if (g.byokKeyEnc) return { ok: true, remaining: Number.POSITIVE_INFINITY };
     if (Date.parse(g.renewsAt) < Date.now()) {
       g.rendersRemaining = this.allowance(g.plan);
       g.renewsAt = new Date(Date.now() + 30 * 86_400_000).toISOString();
     }
-    if (g.rendersRemaining < n) {
+    const bonus = g.bonusRenders ?? 0;
+    const total = g.rendersRemaining + bonus;
+    if (total < n) {
       await this.store.saveGuild(g);
-      return { ok: false, remaining: g.rendersRemaining, reason: `${g.rendersRemaining} render${g.rendersRemaining === 1 ? "" : "s"} left on the ${g.plan} plan (needs ${n}); resets ${g.renewsAt.slice(0, 10)}` };
+      return { ok: false, remaining: total, reason: `${total} render${total === 1 ? "" : "s"} left on the ${g.plan} plan (needs ${n}); the monthly allowance resets ${g.renewsAt.slice(0, 10)}` };
     }
-    g.rendersRemaining -= n;
+    const fromMonthly = Math.min(n, g.rendersRemaining);
+    g.rendersRemaining -= fromMonthly;
+    g.bonusRenders = bonus - (n - fromMonthly);
     await this.store.saveGuild(g);
-    return { ok: true, remaining: g.rendersRemaining };
+    return { ok: true, remaining: g.rendersRemaining + g.bonusRenders };
+  }
+
+  productInfo(): { metering: boolean; freeRenders: number; teamRenders: number } {
+    return { metering: this.product.metering, freeRenders: this.product.freeRenders, teamRenders: this.product.teamRenders };
+  }
+
+  /** true the first time it is called for a server */
+  async markWelcomed(guildId: string): Promise<boolean> {
+    const g = await this.guild(guildId);
+    if (g.welcomedAt) return false;
+    g.welcomedAt = new Date().toISOString();
+    await this.store.saveGuild(g);
+    return true;
   }
 
   setDefaultClient(c: Anthropic): void {
@@ -141,21 +171,103 @@ export class Orchestrator {
     }
     if (!/^sk-ant-/.test(key) || key.length < 30) return "That doesn't look like an Anthropic API key (they start with sk-ant-). Nothing was saved.";
     g.byokKeyEnc = encrypt(key, this.product.secret);
-    g.plan = "byok";
+    if (g.plan === "free") g.plan = "byok";
     await this.store.saveGuild(g);
     return `Saved ${maskKey(key)} for this server, encrypted. Sessions here now run on your key with unlimited renders. \`/setup remove\` to delete it.`;
   }
 
-  async planText(guildId: string): Promise<string> {
+  /** Signed upgrade link for a server, or the static UPGRADE_URL, or nothing. */
+  upgradeLink(guildId: string, channelId?: string): string | undefined {
+    if (this.product.billingLink) return this.product.billingLink(guildId, channelId);
+    return this.product.upgradeUrl ? this.product.upgradeUrl.replace("{guild}", guildId) : undefined;
+  }
+
+  async planText(guildId: string, channelId?: string): Promise<string> {
     const g = await this.guild(guildId);
-    const upgrade = this.product.upgradeUrl ? this.product.upgradeUrl.replace("{guild}", guildId) : undefined;
-    const L = [`**Plan:** ${g.plan}${g.plan === "byok" ? " (your own key, unlimited renders)" : ""}`];
+    const upgrade = this.upgradeLink(guildId, channelId);
+    const names: Record<string, string> = { free: "Free", team: "Team", byok: "Your own key" };
+    const L = [`**Plan:** ${names[g.plan] ?? g.plan}${g.byokKeyEnc ? " · running on your own Anthropic key (unlimited renders)" : ""}`];
     if (!this.product.metering) L.push("Metering is off on this Arbiter: renders are unlimited.");
-    else if (g.plan !== "byok") L.push(`**Renders left:** ${g.rendersRemaining} of ${this.allowance(g.plan)} · resets ${g.renewsAt.slice(0, 10)}`);
+    else if (!g.byokKeyEnc) {
+      L.push(`**Renders left:** ${g.rendersRemaining} of ${this.allowance(g.plan)} this month (resets ${g.renewsAt.slice(0, 10)})${g.bonusRenders ? ` + ${g.bonusRenders} from packs` : ""}`);
+    }
     L.push("A render is one generated version or one fork variant.");
-    if (upgrade) L.push(`Upgrade or buy a pack: ${upgrade}`);
-    L.push("Or bring your own Anthropic key: `/setup key:<your key>` (stored encrypted, never shown).");
+    if (upgrade) L.push(g.plan === "team" ? `Buy a render pack or manage billing: ${upgrade}` : `Upgrade to Team or buy a render pack: ${upgrade}`);
+    if (!g.byokKeyEnc) L.push("Or bring your own Anthropic key, free and unlimited: `/setup key:<your key>` (Manage Server only, stored encrypted).");
     return L.join("\n");
+  }
+
+  // ---------------------------------------------------------------- billing events (called by the Stripe webhook)
+
+  /** Returns false when this event was already applied (Stripe retries deliveries). */
+  private async once(g: GuildSettings, eventId: string): Promise<boolean> {
+    const seen = g.stripeEvents ?? [];
+    if (seen.includes(eventId)) return false;
+    g.stripeEvents = [...seen, eventId].slice(-50);
+    return true;
+  }
+
+  async billingTeamStarted(guildId: string, eventId: string, customerId?: string, subscriptionId?: string): Promise<boolean> {
+    const g = await this.guild(guildId);
+    if (!(await this.once(g, eventId))) return false;
+    g.plan = "team";
+    g.rendersRemaining = this.allowance("team");
+    g.renewsAt = new Date(Date.now() + 31 * 86_400_000).toISOString();
+    if (customerId) g.stripeCustomerId = customerId;
+    if (subscriptionId) g.stripeSubscriptionId = subscriptionId;
+    await this.store.saveGuild(g);
+    return true;
+  }
+
+  async billingPackBought(guildId: string, eventId: string, customerId?: string): Promise<boolean> {
+    const g = await this.guild(guildId);
+    if (!(await this.once(g, eventId))) return false;
+    g.bonusRenders = (g.bonusRenders ?? 0) + (this.product.packRenders ?? 20);
+    if (customerId && !g.stripeCustomerId) g.stripeCustomerId = customerId;
+    await this.store.saveGuild(g);
+    return true;
+  }
+
+  async billingRenewed(customerId: string, eventId: string): Promise<GuildSettings | undefined> {
+    const g = await this.store.findGuildByCustomer(customerId);
+    if (!g || g.plan !== "team" || !(await this.once(g, eventId))) return undefined;
+    g.rendersRemaining = this.allowance("team");
+    g.renewsAt = new Date(Date.now() + 31 * 86_400_000).toISOString();
+    await this.store.saveGuild(g);
+    return g;
+  }
+
+  async billingCanceled(customerId: string, eventId: string): Promise<GuildSettings | undefined> {
+    const g = await this.store.findGuildByCustomer(customerId);
+    if (!g || !(await this.once(g, eventId))) return undefined;
+    g.plan = g.byokKeyEnc ? "byok" : "free";
+    g.stripeSubscriptionId = undefined;
+    g.rendersRemaining = Math.min(g.rendersRemaining, this.allowance("free"));
+    await this.store.saveGuild(g);
+    return g;
+  }
+
+  // ---------------------------------------------------------------- retention
+
+  /** Delete sessions idle longer than retentionDays on servers without a paid plan or own key. */
+  async sweepRetention(now = Date.now()): Promise<number> {
+    const days = this.product.retentionDays ?? 0;
+    if (!days) return 0;
+    const cutoff = now - days * 86_400_000;
+    let removed = 0;
+    for (const p of await this.store.loadAll()) {
+      if (this.running.has(p.id)) continue;
+      const last = Math.max(Date.parse(p.createdAt), ...p.transcript.map((t) => Date.parse(t.at)).filter((x) => !Number.isNaN(x)));
+      if (last >= cutoff) continue;
+      if (p.guildId) {
+        const g = await this.guild(p.guildId);
+        if (g.plan === "team" || g.byokKeyEnc) continue;
+      }
+      await this.forget(p.id);
+      removed++;
+    }
+    if (removed) log.info(`retention: deleted ${removed} session(s) idle > ${days} days`);
+    return removed;
   }
 
   async forget(projectId: string): Promise<boolean> {

@@ -249,8 +249,8 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
   const id = `v${nextVersionNumber(p)}`;
   await ctx.store.writeHtml(p.id, id, html);
   const url = `${ctx.baseUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
-  const localUrl = `http://localhost:${new URL(ctx.baseUrl).port || 80}`; // screenshots always go through the local server
-  const shotUrl = ctx.baseUrl.startsWith("http://localhost") ? url : `${localUrl}/p/${p.id}/${id}${ctx.urlSuffix}`;
+  // Screenshots always go through the local listener, whatever the public URL is.
+  const shotUrl = `${localBase(ctx)}/p/${p.id}/${id}${ctx.urlSuffix}`;
 
   let shot;
   try {

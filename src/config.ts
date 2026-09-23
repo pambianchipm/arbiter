@@ -55,6 +55,18 @@ export const config = {
     previewTokens: str("PREVIEW_TOKENS", str("PUBLIC_BASE_URL") ? "1" : "0") === "1",
     adminToken: str("ADMIN_TOKEN"), // unlocks the /live session index when hosted
     maxConcurrentRenders: num("MAX_CONCURRENT_RENDERS", 3),
+    packRenders: num("PACK_RENDERS", 20),
+    retentionDays: num("RETENTION_DAYS", 30),
+    contactEmail: str("CONTACT_EMAIL"),
+    teamPriceLabel: str("TEAM_PRICE_LABEL", "$12 / month"),
+    packPriceLabel: str("PACK_PRICE_LABEL", "$5"),
+  },
+  stripe: {
+    secretKey: str("STRIPE_SECRET_KEY"),
+    webhookSecret: str("STRIPE_WEBHOOK_SECRET"),
+    priceTeam: str("STRIPE_PRICE_TEAM"),
+    pricePack: str("STRIPE_PRICE_PACK"),
+    automaticTax: str("STRIPE_AUTOMATIC_TAX", "0") === "1",
   },
   dataDir: str("DATA_DIR", "./data"),
   debounceMs: num("DEBOUNCE_MS", 6000),
