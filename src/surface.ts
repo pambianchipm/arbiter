@@ -6,6 +6,10 @@ import type { Fork, Project, Question, Version } from "./types.js";
  */
 export interface Surface {
   postText(project: Project, text: string): Promise<void>;
+  /** the "On it" message: optional role picker and first-session tips */
+  postKickoff(project: Project, text: string, opts: { roleMenu: boolean; tips?: string[] }): Promise<void>;
+  /** the server ran out of renders mid-turn: explain and offer the upgrade link */
+  postUpgradePrompt(project: Project, text: string, url?: string): Promise<void>;
   postVersion(project: Project, version: Version, png: Buffer): Promise<{ messageId?: string }>;
   postFork(project: Project, fork: Fork, png: Buffer): Promise<{ messageId?: string }>;
   updateForkTally(project: Project, fork: Fork): Promise<void>;

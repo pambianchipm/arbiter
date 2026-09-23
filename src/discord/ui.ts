@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  StringSelectMenuBuilder,
   AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -148,8 +149,8 @@ export function welcomeEmbed(info: { metering: boolean; freeRenders: number }): 
       "I'm a design agent for your team. Describe a page, I build a live prototype in about a minute, and everyone iterates in the thread. When two of you want opposite things, I build both and you vote.",
     )
     .addFields(
-      { name: "1 · Start", value: "`/design brief: landing page for …` in any channel. Attach a whiteboard photo or add a site to borrow the feel from." },
-      { name: "2 · Iterate", value: "Reply in the thread, or `/voice join` and talk. Tell me roles with `/role designer|pm|eng` so questions go to the right person." },
+      { name: "1 · Start", value: "Hit **✨ Start a design session** below, or type `/design brief: landing page for …` in any channel. You can attach a whiteboard photo or name a site to borrow the feel from." },
+      { name: "2 · Iterate", value: "Reply in the thread, or `/voice join` and talk. Pick your role in the menu below so questions go to the right person." },
       { name: "3 · Ship", value: "✅ Approve when it's right, then 📦 Handoff for a zip your coding agent can build from. Approved pages teach me your brand." },
       {
         name: "Plan",
@@ -159,4 +160,58 @@ export function welcomeEmbed(info: { metering: boolean; freeRenders: number }): 
       },
     )
     .setFooter({ text: "/help shows this again · /forget deletes a session" });
+}
+
+
+export const ROLE_OPTIONS = [
+  { label: "Designer", value: "designer", description: "Visual calls come to you; you break visual ties", emoji: "🎨" },
+  { label: "Product / PM", value: "pm", description: "Content and priority calls come to you", emoji: "🧭" },
+  { label: "Engineer", value: "eng", description: "Feasibility questions and constraints come to you", emoji: "🛠️" },
+  { label: "Stakeholder", value: "stakeholder", description: "You weigh in; no tiebreak duty", emoji: "👀" },
+];
+
+export function roleMenuRow(): ActionRowBuilder<StringSelectMenuBuilder> {
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder().setCustomId("role_pick").setPlaceholder("What's your role? I'll route questions to you").addOptions(ROLE_OPTIONS),
+  );
+}
+
+/** Buttons under the welcome and /help messages. */
+export function onboardingRows(siteUrl?: string): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
+  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("onboard_start").setLabel("Start a design session").setEmoji("✨").setStyle(ButtonStyle.Primary),
+  );
+  if (siteUrl && isPublicUrl(siteUrl)) buttons.addComponents(new ButtonBuilder().setLabel("How it works").setStyle(ButtonStyle.Link).setURL(siteUrl));
+  return [buttons as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>, roleMenuRow() as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>];
+}
+
+export function startModal(): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId("start_modal")
+    .setTitle("Start a design session")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("brief")
+          .setLabel("What are we building?")
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder("e.g. A landing page for our coffee subscription: hero, how it works, three plans, FAQ.")
+          .setRequired(true)
+          .setMinLength(8)
+          .setMaxLength(600),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("reference")
+          .setLabel("A site whose feel you like (optional)")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("https://linear.app")
+          .setRequired(false)
+          .setMaxLength(200),
+      ),
+    );
+}
+
+export function upgradeRow(url: string): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setLabel("Upgrade or buy renders").setEmoji("⚡").setStyle(ButtonStyle.Link).setURL(url));
 }

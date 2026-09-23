@@ -135,6 +135,8 @@ async function main(): Promise<void> {
   assert(tailwindLoaded, "preview reachable");
   assert(p.questions.length === 1 && p.questions[0].to === "designer", "question logged for designer");
   assert(surface.log.some((l) => l.startsWith("📐 v1")), "version posted to surface");
+  const kickLine = surface.log.find((l) => l.startsWith("On it."))!;
+  assert(kickLine.includes("Two people want different things") && kickLine.includes("[role picker"), "first session on a server gets tips and a role picker");
   const res = await fetch(`${baseUrl}/p/${threadId}/v1`);
   assert(res.status === 200 && (await res.text()).includes("<html"), "preview server serves v1");
   const warn = p.versions[0].renderWarnings ?? [];
@@ -447,6 +449,16 @@ async function main(): Promise<void> {
     const hv = hp.versions[0];
     assert(hv && hv.previewUrl.startsWith("https://arbiter.example/p/thread_hosted/v1?k=") && (await store.readPng(hid, "v1"))!.length > 10_000, "render works when the public URL isn't localhost (screenshot via local listener, tokened link)");
     assert((await store.getGuild("hosted-guild", { plan: "free", renders: 3 })).rendersRemaining === 2, "the render was metered");
+    const hg = await store.getGuild("hosted-guild", { plan: "free", renders: 3 });
+    hg.rendersRemaining = 0;
+    await store.saveGuild(hg);
+    fake.push(
+      msg([toolUse("publish_version", { html: HTML_V2A, summary: "Should be refused", changes: [], addresses: ["Ana"] })], "tool_use"),
+      msg([text("We're out of renders on this server.")], "end_turn"),
+    );
+    await hosted.addHumanMessage(hid, { userId: "u_ana", name: "Ana", text: "more whitespace" });
+    await waitFor("out-of-renders turn", async () => (await store.load(hid))?.turnCount === 2);
+    assert((await store.load(hid))!.versions.length === 1 && surface.log.some((l) => l.startsWith("🔋 **Out of renders.**")), "out of renders: nothing published, upgrade prompt posted");
 
     const old = { ...hp, id: "thread_old", threadId: "thread_old", guildId: "hosted-guild", createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString(), transcript: [] };
     await store.save(old);
@@ -461,9 +473,37 @@ async function main(): Promise<void> {
     await store.deleteProject(hid);
 
     assert((await hosted.markWelcomed("welcome-guild")) && !(await hosted.markWelcomed("welcome-guild")), "welcome message posts once per server");
-    const { welcomeEmbed } = await import("../src/discord/ui.js");
+    const { welcomeEmbed, onboardingRows, startModal, roleMenuRow, upgradeRow } = await import("../src/discord/ui.js");
     const we = welcomeEmbed({ metering: true, freeRenders: 3 }).toJSON();
     assert(we.fields?.length === 4 && we.fields.every((f) => f.value.length <= 1024), "welcome embed is valid for Discord");
+    const rows = onboardingRows("https://arbiter.example").map((r) => r.toJSON());
+    assert(rows.length === 2 && rows[0].components.length === 2 && JSON.stringify(rows[1]).includes("role_pick"), "welcome has a Start button, a site link and a role picker");
+    assert(onboardingRows("http://localhost:3939")[0].toJSON().components.length === 1, "no site link when the site is localhost");
+    const modal = startModal().toJSON();
+    assert(modal.custom_id === "start_modal" && modal.components.length === 2, "start modal has brief + reference fields");
+    assert((roleMenuRow().toJSON().components[0] as { options: unknown[] }).options.length === 4 && upgradeRow("https://x.test/u").toJSON().components.length === 1, "role menu and upgrade button build");
+
+    // Preflight + setup page: misconfiguration never crashes, it explains
+    const { preflight, checkDataDir, hasFatal } = await import("../src/preflight.js");
+    const { config: baseCfg } = await import("../src/config.js");
+    const cfg = structuredClone(baseCfg);
+    cfg.discord.token = "";
+    cfg.discord.clientId = "not-a-number";
+    cfg.stripe = { ...cfg.stripe, secretKey: "pk_test_x", webhookSecret: "whsec_1", priceTeam: "price_1", pricePack: "price_2" };
+    const checks = preflight(cfg, { RAILWAY_PROJECT_ID: "p", RAILWAY_PUBLIC_DOMAIN: "a.up.railway.app" });
+    const by = (id: string) => checks.find((c) => c.id === id);
+    assert(hasFatal(checks) && by("discord-token")?.level === "fatal" && by("discord-client")?.level === "fatal" && by("anthropic")?.level === "fatal", "preflight: missing Discord/Anthropic config is fatal");
+    assert(by("volume")?.level === "warn" && by("stripe")?.title.includes("secret key"), "preflight: no Railway volume and a publishable Stripe key are flagged");
+    await fs.writeFile(path.join(dataDir, "a-file"), "x");
+    assert((await checkDataDir(path.join(dataDir, "a-file", "sub"))).level === "fatal", "preflight: unwritable data dir is fatal");
+    const { setupPage } = await import("../src/web/pages.js");
+    const ssrv = await listen(createPreviewServer(store, { tokens: true, setup: () => ({ blocking: hasFatal(checks), html: setupPage(checks, { discord: "offline" }) }), health: () => ({ ready: false }) }), 0);
+    const S = `http://localhost:${(ssrv.address() as AddressInfo).port}`;
+    const sroot = await (await fetch(`${S}/`)).text();
+    const sh = (await (await fetch(`${S}/health`)).json()) as { ok: boolean; ready: boolean };
+    assert(sroot.includes("Arbiter isn't running yet") && sroot.includes("DISCORD_TOKEN is not set") && !sroot.includes("pk_test_x"), "setup page replaces / while blocked and shows no secret values");
+    assert(sh.ok === true && sh.ready === false, "/health stays 200 while misconfigured, so the host doesn't crash-loop");
+    ssrv.close();
   }
 
   // ---- Restart survives: fresh store loads state from disk

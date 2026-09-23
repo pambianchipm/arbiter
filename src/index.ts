@@ -1,9 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
-import { PermissionFlagsBits, PermissionsBitField } from "discord.js";
+import os from "node:os";
+import path from "node:path";
+import { Events, PermissionFlagsBits, PermissionsBitField } from "discord.js";
+import { preflight, checkDataDir, hasFatal } from "./preflight.js";
 import { mountBilling, billingLink, type StripeLike } from "./billing.js";
-import { landingPage, type SiteInfo } from "./web/pages.js";
-import { config, baseUrl, requireDiscordConfig } from "./config.js";
+import { landingPage, setupPage, type SiteInfo } from "./web/pages.js";
+import { config, baseUrl } from "./config.js";
 import { Store } from "./store.js";
 import { createPreviewServer, listen } from "./render/server.js";
 import { Screenshotter } from "./render/screenshot.js";
@@ -19,10 +22,21 @@ import { ElevenLabsTTS } from "./voice/tts.js";
 import { RelevanceGate } from "./voice/gate.js";
 import { log, errMsg } from "./log.js";
 
-async function main(): Promise<void> {
-  requireDiscordConfig();
+// A stray rejected promise must never take the whole bot down; log it and keep serving.
+process.on("unhandledRejection", (e) => log.error("unhandled rejection (still running):", errMsg(e)));
 
-  const store = new Store(config.dataDir);
+async function main(): Promise<void> {
+  // Check everything first. Configuration problems never crash the process: the web server comes up,
+  // /health passes, and / shows a setup page listing what to fix. Hosts stop crash-looping; people see why.
+  const checks = preflight(config);
+  let dataDir = config.dataDir;
+  const dirCheck = await checkDataDir(dataDir);
+  checks.push(dirCheck);
+  if (dirCheck.level === "fatal") dataDir = path.join(os.tmpdir(), "arbiter-data");
+  const state = { discord: "not started", ready: false };
+  for (const c of checks) if (c.level !== "ok") (c.level === "fatal" ? log.error : log.warn)(`setup: ${c.title}${c.fix ? ` — ${c.fix}` : ""}`);
+
+  const store = new Store(dataDir);
   await store.init();
 
   const invitePerms = new PermissionsBitField([
@@ -53,7 +67,29 @@ async function main(): Promise<void> {
     legalDir: "docs/legal",
     contactEmail: config.product.contactEmail || undefined,
     landing: () => landingPage(site),
+    health: () => ({ ready: state.ready, discord: state.discord, problems: checks.filter((c) => c.level !== "ok").map((c) => c.title) }),
+    setup: () => ({ blocking: hasFatal(checks), html: setupPage(checks, state) }),
   });
+
+  let stopping = false;
+  const stopHandlers: (() => Promise<void>)[] = [];
+  const shutdown = async (sig: string) => {
+    if (stopping) return;
+    stopping = true;
+    log.info(`${sig} — shutting down`);
+    for (const h of stopHandlers) await h().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  if (hasFatal(checks)) {
+    const server = await listen(app, config.server.port);
+    stopHandlers.push(async () => void server.close());
+    state.discord = "offline until setup is fixed";
+    log.error(`Bot is OFFLINE. Open ${baseUrl()}/ for the list of what to fix. The web server stays up so the host doesn't crash-loop.`);
+    return;
+  }
   const shots = new Screenshotter(config.server.chromiumPath, config.product.maxConcurrentRenders);
 
   const anthropic = new Anthropic();
@@ -114,6 +150,7 @@ async function main(): Promise<void> {
     log.info(`billing · stripe ${config.stripe.secretKey.startsWith("sk_live") ? "LIVE" : "test"} mode · webhook at ${baseUrl()}/stripe/webhook`);
   }
   const server = await listen(app, config.server.port);
+  stopHandlers.push(async () => void server.close());
 
   // Retention: delete idle free sessions daily (hosted mode only; the privacy policy promises this).
   if (config.product.metering && config.product.retentionDays > 0) {
@@ -133,27 +170,31 @@ async function main(): Promise<void> {
   });
   orch.attachVoice(voice);
 
-  attachHandlers(client, orch, voice);
+  attachHandlers(client, orch, voice, { siteUrl: config.server.publicBaseUrl || undefined });
+  client.once(Events.ClientReady, (c) => {
+    state.ready = true;
+    state.discord = `connected as ${c.user.tag} in ${c.guilds.cache.size} server${c.guilds.cache.size === 1 ? "" : "s"}`;
+  });
+  stopHandlers.unshift(async () => {
+    await voice.destroyAll().catch(() => undefined);
+    client.destroy();
+    await shots.close();
+  });
   try {
+    state.discord = "logging in";
     await client.login(config.discord.token);
   } catch (e) {
-    throw new Error(explainDiscordError(e));
+    const why = explainDiscordError(e);
+    checks.push({ id: "discord-login", level: "fatal", title: `Discord login failed: ${why}` });
+    state.discord = "login failed";
+    log.error(`Discord login failed: ${why} The web server stays up; ${baseUrl()}/ shows the setup page.`);
+    client.destroy();
+    return;
   }
   log.info(`arbiter up · model=${config.model.id} effort=${config.model.effort} fast=${config.model.fastMode} · previews at ${baseUrl()}`);
   log.info(`product · metering=${config.product.metering} previewTokens=${config.product.previewTokens} byok=${config.product.secret ? "enabled" : "off (set ARBITER_SECRET)"} maxRenders=${config.product.maxConcurrentRenders}`);
   log.info(`voice · stt=${stt?.name ?? "none (set ELEVENLABS_API_KEY or OPENAI_API_KEY)"} · tts=${tts ? "elevenlabs" : "off"} · mode=${config.voice.mode} · gate=${gate ? config.voice.gateModel : "off"} · batch=${config.voice.debounceMs}ms`);
   if (stt) log.info("voice dependency report:\n" + generateDependencyReport());
-
-  const shutdown = async (sig: string) => {
-    log.info(`${sig} — shutting down`);
-    await voice.destroyAll().catch(() => undefined);
-    client.destroy();
-    await shots.close();
-    server.close();
-    process.exit(0);
-  };
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((e) => {

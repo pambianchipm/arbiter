@@ -133,6 +133,13 @@ export class Orchestrator {
     return { metering: this.product.metering, freeRenders: this.product.freeRenders, teamRenders: this.product.teamRenders };
   }
 
+  private async bumpSessions(guildId: string): Promise<number> {
+    const g = await this.guild(guildId);
+    g.sessionsStarted = (g.sessionsStarted ?? 0) + 1;
+    await this.store.saveGuild(g);
+    return g.sessionsStarted;
+  }
+
   /** true the first time it is called for a server */
   async markWelcomed(guildId: string): Promise<boolean> {
     const g = await this.guild(guildId);
@@ -349,10 +356,22 @@ export class Orchestrator {
     };
     await this.store.save(p);
     if (args.images?.length) this.pendingImages.set(p.id, [...args.images]);
+    const sessionNo = args.guildId ? await this.bumpSessions(args.guildId) : 99;
     const onBrand = brand && (brand.pages.length || brand.chrome || brand.style) ? ` On the **${brand.name}** brand: ${brand.pages.length} page${brand.pages.length === 1 ? "" : "s"} so far${brand.chrome ? ", reusing its header and footer" : ""}.` : "";
-    await this.surface.postText(
+    await this.surface.postKickoff(
       p,
       `On it. Building v1 from the brief${args.images?.length ? " and your sketch" : ""}.${onBrand} First render usually lands in under a minute.\n📺 Live canvas (screen-share this): ${this.liveUrl(p)}`,
+      {
+        roleMenu: true,
+        tips:
+          sessionNo <= 3
+            ? [
+                "Reply in this thread with feedback. Everyone's replies count, and messages sent close together are read as one conversation.",
+                "Two people want different things? Just say so. I build both side by side and you vote.",
+                "When it's right, hit ✅ Approve on the version. 📦 Handoff gives you a zip your coding agent can build from.",
+              ]
+            : undefined,
+      },
     );
     void this.trigger(p.id, { kind: "kickoff" });
     return p;
@@ -469,6 +488,14 @@ export class Orchestrator {
     await this.store.save(p);
 
     if (result.text) await this.surface.postText(p, result.text);
+    if (result.outOfRenders) {
+      const url = p.guildId ? this.upgradeLink(p.guildId, p.threadId) : undefined;
+      await this.surface.postUpgradePrompt(
+        p,
+        `🔋 **Out of renders.** This server has used its renders for now. Upgrade to keep going, buy a pack, or run \`/setup key:\` to use your own Anthropic key for unlimited renders.`,
+        url,
+      );
+    }
     if (result.error) await this.surface.postText(p, `⚠️ ${result.error}${result.publishedVersionIds.length ? "" : " Nothing was published this turn; reply to try again."}`);
     if (this.voice?.has(p.id)) {
       // Say out loud what a listener needs: narration lines, the questions, the closing message.

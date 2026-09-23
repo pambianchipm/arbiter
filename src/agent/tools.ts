@@ -244,7 +244,10 @@ async function publishVersion(input: Record<string, unknown>, ctx: ToolContext):
   const bad = validateHtml(html);
   if (bad) return fail(`Invalid html: ${bad}. Fix and call publish_version again.`);
   const credit = await ctx.meter(1);
-  if (!credit.ok) return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders and that /plan shows how to add more.`);
+  if (!credit.ok) {
+    ctx.result.outOfRenders = true;
+    return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders; an upgrade button is posted for them automatically.`);
+  }
 
   const id = `v${nextVersionNumber(p)}`;
   await ctx.store.writeHtml(p.id, id, html);
@@ -321,7 +324,10 @@ async function forkVariants(input: Record<string, unknown>, ctx: ToolContext): P
   const [ra, rb] = await Promise.all([resolveSide(a, "A"), resolveSide(b, "B")]);
   if (ra.error || rb.error) return fail(`Invalid fork: ${[ra.error, rb.error].filter(Boolean).join("; ")}`);
   const credit = await ctx.meter(2);
-  if (!credit.ok) return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders and that /plan shows how to add more.`);
+  if (!credit.ok) {
+    ctx.result.outOfRenders = true;
+    return fail(`OUT OF RENDERS: ${credit.reason ?? "this server has used its allowance"}. Do not retry. Tell the team plainly that the server is out of renders; an upgrade button is posted for them automatically.`);
+  }
   const htmlA = ra.html!;
   const htmlB = rb.html!;
 

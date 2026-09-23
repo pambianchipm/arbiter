@@ -28,15 +28,15 @@ Time: about an hour, plus Stripe's account review.
    Without it, every deploy wipes them.
 3. **Networking → Generate Domain** (or add your own domain and point a CNAME at it). That URL is
    `PUBLIC_BASE_URL` below.
-4. **Variables → Raw Editor**, paste and fill:
+4. **Variables → Raw Editor**, paste and fill. Values only, no `# comments` on the same line.
+   `PUBLIC_BASE_URL` and `DATA_DIR` are picked up from Railway's domain and volume automatically;
+   set them only to override (e.g. a custom domain).
    ```
    DISCORD_TOKEN=
    DISCORD_CLIENT_ID=
    ANTHROPIC_API_KEY=
    ARBITER_MODEL=claude-opus-5
    ARBITER_EFFORT=medium
-   PUBLIC_BASE_URL=https://your-domain
-   DATA_DIR=/data
    METERING=1
    ARBITER_SECRET=
    ADMIN_TOKEN=
@@ -51,7 +51,13 @@ Time: about an hour, plus Stripe's account review.
    bot. The first time, they can take up to an hour to appear.
 5. Deploy. The logs should show `discord ready as …`, `product · metering=true`, and
    `billing` will be absent until step 2 is done. Open `https://your-domain/`: you should see the
-   landing page. `https://your-domain/health` returns `{"ok":true}`.
+   landing page. `https://your-domain/health` returns `{"ok":true,"ready":true,…}`.
+
+   **If it isn't working, open your domain.** Arbiter never crash-loops on configuration: the web
+   server stays up and `/` shows **"Arbiter isn't running yet"** with every problem and its fix
+   (missing or malformed variables, a bad Discord token, the Message Content intent turned off, no
+   volume, half-configured Stripe). Fix the variables, Railway redeploys, refresh. Once everything works,
+   the status page is at `/setup?admin=<ADMIN_TOKEN>`.
 
 Railway runs one replica (set in `railway.json`). Keep it that way: two replicas means two bots.
 
@@ -116,7 +122,19 @@ Tax: if you need to collect sales tax/VAT, set up Stripe Tax, then `STRIPE_AUTOM
    Message Content intent with the honest reason: *reads messages only in threads it created, to act
    on design feedback*. Approval can take weeks, so apply as soon as verification opens.
 
-## 4. After launch
+## 4. Make the landing page yours (optional, and a good launch story)
+
+The built-in landing page works. To replace it with one designed by Arbiter itself:
+
+1. In your server: `/design brief: Landing page for Arbiter, a design agent that lives in Discord. It builds live prototypes from a brief, forks A/B when teammates disagree and lets them vote, remembers the brand, and hands off a zip for coding agents. Sections: hero with an Add to Discord button, a mock Discord thread showing a fork and a vote, how it works in four steps, pricing (Free, Team, your own key), FAQ, footer with privacy, terms and contact.`
+2. Iterate with your team until it's approved, then 📦 Handoff.
+3. Take `index.html` from the zip, put it in the repo at `web/landing.html`, and replace the literal
+   values with placeholders: `{{INVITE_URL}}` for every Add to Discord link, and optionally
+   `{{PRICE_TEAM}}`, `{{PRICE_PACK}}`, `{{FREE_RENDERS}}`, `{{TEAM_RENDERS}}`, `{{PACK_RENDERS}}`,
+   `{{CONTACT_EMAIL}}`. Keep links to `/privacy` and `/terms`.
+4. Push. The next deploy serves it at `/`.
+
+## 5. After launch
 
 - Watch the Railway logs for `ERROR` and `billing:` lines for the first few days.
 - `https://your-domain/live?admin=<ADMIN_TOKEN>` lists every session.

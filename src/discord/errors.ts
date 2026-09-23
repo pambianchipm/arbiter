@@ -10,7 +10,7 @@ export function explainDiscordError(e: unknown): string {
     return "Discord refused the login because the Message Content intent is not enabled. Developer Portal → your app → Bot → Privileged Gateway Intents → turn on MESSAGE CONTENT INTENT → Save, then restart.";
   }
   if (code === "TokenInvalid") {
-    return "DISCORD_TOKEN is not a valid bot token. Developer Portal → Bot → Reset Token, paste the new value into .env, restart.";
+    return "DISCORD_TOKEN is not a valid bot token. Developer Portal → Bot → Reset Token, put the new value in DISCORD_TOKEN (your .env locally, or your host's variables), restart.";
   }
   if (e instanceof DiscordAPIError) {
     switch (e.code) {

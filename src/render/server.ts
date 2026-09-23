@@ -24,6 +24,10 @@ export interface PreviewOptions {
   contactEmail?: string;
   /** the public landing page (served at / when hosted, and at /home always) */
   landing?: () => Promise<string>;
+  /** health payload; always 200 so a misconfigured deploy stays up and shows /setup */
+  health?: () => Record<string, unknown>;
+  /** setup/status page; `blocking` true means it replaces / until fixed */
+  setup?: () => { blocking: boolean; html: string };
 }
 
 export function createPreviewServer(store: Store, opts: PreviewOptions = {}): express.Express {
@@ -60,7 +64,22 @@ export function createPreviewServer(store: Store, opts: PreviewOptions = {}): ex
   app.get("/terms", (_req, res) => void legal("terms", res));
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, ...(opts.health?.() ?? {}) });
+  });
+
+  app.get("/setup", (req, res) => {
+    const st = opts.setup?.();
+    if (!st) {
+      res.status(404).type("text/plain").send("not configured");
+      return;
+    }
+    // Once everything works, the status page is for the operator only.
+    if (!st.blocking && opts.tokens && (!opts.adminToken || req.query.admin !== opts.adminToken)) {
+      res.status(404).type("text/plain").send("not found");
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(st.html);
   });
 
   app.get("/p/:project/compare/:a/:b", async (req, res) => {
@@ -171,6 +190,12 @@ export function createPreviewServer(store: Store, opts: PreviewOptions = {}): ex
   });
 
   app.get(["/", "/live"], async (req, res) => {
+    const st = opts.setup?.();
+    if (st?.blocking && req.path === "/") {
+      res.setHeader("Cache-Control", "no-store");
+      res.type("html").send(st.html);
+      return;
+    }
     if (opts.tokens && (!opts.adminToken || req.query.admin !== opts.adminToken)) {
       if (req.path === "/" && opts.landing) {
         res.type("html").send(await opts.landing());

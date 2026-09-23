@@ -59,7 +59,8 @@ src/brand.ts              chrome extraction and absorbing shipped pages into bra
 src/handoff.ts            handoff.md, BUILD.md, brand.md, and the zip
 src/voice/{manager,stt,tts,gate,audio}.ts   voice session per thread, ElevenLabs/OpenAI STT, ElevenLabs TTS, noise + relevance gates
 src/billing.ts            Stripe checkout, portal, webhook; signed upgrade links (HMAC with ARBITER_SECRET)
-src/web/pages.ts          landing (overridable by web/landing.html), upgrade, result pages
+src/web/pages.ts          landing (overridable by web/landing.html), upgrade, result, setup pages
+src/preflight.ts          boot checks → setup page; tolerant env parsing lives in config.ts
 src/net.ts, src/crypto.ts private-address guard for study_reference; AES-256-GCM for bring-your-own keys
 Dockerfile, railway.json  production image (Playwright base) and Railway config
 scripts/smoke.ts          the test. scripts/dry.ts the REPL. scripts/console-surface.ts a Surface that prints.
@@ -99,6 +100,9 @@ arrives as a pair. While a turn runs, new messages queue for the next one. One t
     the orchestrator, called from `src/billing.ts` after signature verification; each Stripe event id is
     applied once. Don't grant renders anywhere else.
 12. **`ARBITER_SECRET` is permanent** once live: it encrypts saved keys and signs upgrade links.
+13. **Configuration problems never crash the process.** `src/preflight.ts` checks everything at boot;
+    fatal problems keep the bot offline but the web server up with a setup page at `/`. Add new
+    required settings there, with a fix line, rather than throwing. `config.ts` must never throw.
 
 ## Model configuration
 
@@ -137,6 +141,10 @@ Prompt caching: system prompt has a cache breakpoint; message history is not yet
   fix an existing bot via Server Settings → Roles or re-run the invite URL.
 - Discord voice needs UDP; there is no TCP fallback. macOS firewall prompts for `node` the first time.
 - Writing two full HTML documents in one `fork_variants` call can truncate; a side may `reuse_version`.
+- First Railway deploys crash-looped: the service boots before variables exist, a new production
+  Discord app has the Message Content intent off, and dashboards keep `# comments` pasted from
+  `.env.example` (so `DEBOUNCE_MS=6000   # …` failed number parsing at import time). Hence preflight,
+  the setup page, comment stripping, and `unhandledRejection` logging instead of dying.
 - On a hosted box the public URL isn't localhost: screenshots must go to the local listener
   (`localBase()` in tools.ts). An early version derived the port from the public URL and would have
   screenshotted port 80 in production; the smoke test now renders through a public base URL.

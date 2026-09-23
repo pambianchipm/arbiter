@@ -1,7 +1,7 @@
 import { AttachmentBuilder, type Client, type SendableChannels } from "discord.js";
 import type { Surface } from "../surface.js";
 import type { Fork, Project, Question, Version } from "../types.js";
-import { chunk, forkEdit, forkMessage, versionMessage } from "./ui.js";
+import { chunk, forkEdit, forkMessage, roleMenuRow, upgradeRow, versionMessage } from "./ui.js";
 import { log, errMsg } from "../log.js";
 import { explainDiscordError } from "./errors.js";
 
@@ -35,6 +35,17 @@ export class DiscordSurface implements Surface {
     for (const part of chunk(text)) {
       await this.send(ch, { content: part, allowedMentions: { parse: ["users"] } });
     }
+  }
+
+  async postKickoff(p: Project, text: string, opts: { roleMenu: boolean; tips?: string[] }): Promise<void> {
+    const ch = await this.channel(p);
+    const tips = opts.tips?.length ? "\n" + opts.tips.map((t) => `-# ${t}`).join("\n") : "";
+    await this.send(ch, { content: `${text}${tips}`.slice(0, 2000), components: opts.roleMenu ? [roleMenuRow()] : [], allowedMentions: { parse: [] } });
+  }
+
+  async postUpgradePrompt(p: Project, text: string, url?: string): Promise<void> {
+    const ch = await this.channel(p);
+    await this.send(ch, { content: text, components: url ? [upgradeRow(url)] : [] });
   }
 
   async postVersion(p: Project, version: Version, png: Buffer): Promise<{ messageId?: string }> {

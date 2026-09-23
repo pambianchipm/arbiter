@@ -16,12 +16,14 @@ import {
   type Interaction,
   type Message,
   type ModalSubmitInteraction,
+  type StringSelectMenuInteraction,
+  type TextChannel,
 } from "discord.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { VoiceManager } from "../voice/manager.js";
 import type { ImageInput, Role } from "../types.js";
 import { displayName, inferRole } from "./people.js";
-import { approvalsFooter, feedbackModal, welcomeEmbed } from "./ui.js";
+import { approvalsFooter, feedbackModal, onboardingRows, startModal, welcomeEmbed } from "./ui.js";
 import { registerCommands } from "./register.js";
 import { log, errMsg } from "../log.js";
 import { explainDiscordError } from "./errors.js";
@@ -74,7 +76,43 @@ function threadName(brief: string): string {
   return t.length > 100 ? t.slice(0, 97) + "…" : t;
 }
 
-export function attachHandlers(client: Client, orch: Orchestrator, voice?: VoiceManager): void {
+export interface BotOptions {
+  /** public landing page, linked from the welcome message */
+  siteUrl?: string;
+}
+
+let botOpts: BotOptions = {};
+
+/** Open a thread in a text channel and start a design session in it. Shared by /design, the Start button and @mentions. */
+export async function openDesignSession(
+  orch: Orchestrator,
+  ch: TextChannel,
+  args: { brief: string; reference?: string; brand?: string; images?: ImageInput[]; user: { id: string; name: string; role?: Role }; guildId?: string; fromMessage?: Message },
+): Promise<{ ok: true; thread: { toString(): string; id: string } } | { ok: false; reason: string }> {
+  let thread;
+  try {
+    thread = args.fromMessage
+      ? await args.fromMessage.startThread({ name: threadName(args.brief), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay })
+      : await ch.threads.create({ name: threadName(args.brief), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay, reason: "Arbiter design session" });
+  } catch (e) {
+    return { ok: false, reason: `I couldn't open a thread here. ${explainDiscordError(e)}` };
+  }
+  const referenceUrl = args.reference?.trim() || /(https?:\/\/\S+)/.exec(args.brief)?.[1];
+  await orch.startProject({
+    threadId: thread.id,
+    channelId: ch.id,
+    guildId: args.guildId,
+    brief: args.brief,
+    referenceUrl: referenceUrl && /^https?:\/\//.test(referenceUrl) ? referenceUrl : undefined,
+    createdBy: args.user,
+    images: args.images,
+    brand: args.brand,
+  });
+  return { ok: true, thread };
+}
+
+export function attachHandlers(client: Client, orch: Orchestrator, voice?: VoiceManager, opts: BotOptions = {}): void {
+  botOpts = opts;
   client.once(Events.ClientReady, async (c) => {
     const guilds = c.guilds.cache.map((g) => ({ id: g.id, name: g.name }));
     log.info(`discord ready as ${c.user.tag} · in ${guilds.length} server(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(", ") || "none — invite it first"}`);
@@ -94,7 +132,7 @@ export function attachHandlers(client: Client, orch: Orchestrator, voice?: Voice
         Boolean(ch && (ch as import("discord.js").TextChannel).type === ChannelType.GuildText && me && (ch as import("discord.js").TextChannel).permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks]));
       const target = canPost(guild.systemChannel) ? guild.systemChannel : guild.channels.cache.filter((c) => canPost(c)).sort((a, b) => ("position" in a && "position" in b ? (a.position as number) - (b.position as number) : 0)).first();
       if (!target || !canPost(target)) return;
-      await target.send({ embeds: [welcomeEmbed(orch.productInfo())] });
+      await target.send({ embeds: [welcomeEmbed(orch.productInfo())], components: onboardingRows(botOpts.siteUrl) });
       log.info(`welcomed ${guild.name} (${guild.id}) in #${target.name}`);
     })().catch((e) => log.warn("welcome:", explainDiscordError(e)));
   });
@@ -136,25 +174,20 @@ async function onMessage(client: Client, orch: Orchestrator, m: Message): Promis
     const brief = m.content.replace(new RegExp(`<@!?${me.id}>`, "g"), "").trim();
     const images = await collectImages([...m.attachments.values()], "sketch attached with the brief");
     if (!brief && !images.length) {
-      await m.reply("Tell me what to build: `@Arbiter landing page for a coffee subscription` (attach a whiteboard photo if you have one), or use `/design`.");
+      await m.reply({
+        content: "Tell me what to build: `@Arbiter landing page for a coffee subscription` (attach a whiteboard photo if you have one), or hit the button.",
+        components: [onboardingRows()[0]],
+      });
       return;
     }
-    let thread;
-    try {
-      thread = await m.startThread({ name: threadName(brief || "sketch"), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay });
-    } catch (e) {
-      await m.reply(`I couldn't open a thread here. ${explainDiscordError(e)}`).catch(() => undefined);
-      return;
-    }
-    const urlInBrief = /(https?:\/\/\S+)/.exec(brief)?.[1];
-    await orch.startProject({
-      threadId: thread.id,
-      channelId: m.channel.id,
-      guildId: m.guildId ?? undefined,
+    await openDesignSession(orch, m.channel as TextChannel, {
       brief: brief || "Build what the attached sketch shows.",
-      referenceUrl: urlInBrief,
-      createdBy: { id: m.author.id, name: displayName({ member: m.member, user: m.author }), role: inferRole(m.member) },
       images,
+      user: { id: m.author.id, name: displayName({ member: m.member, user: m.author }), role: inferRole(m.member) },
+      guildId: m.guildId ?? undefined,
+      fromMessage: m,
+    }).then(async (r) => {
+      if (!r.ok) await m.reply(r.reason).catch(() => undefined);
     });
     return;
   }
@@ -166,6 +199,7 @@ async function onMessage(client: Client, orch: Orchestrator, m: Message): Promis
 
 async function onInteraction(orch: Orchestrator, i: Interaction, voice?: VoiceManager): Promise<void> {
   if (i.isAutocomplete()) return onAutocomplete(orch, i);
+  if (i.isStringSelectMenu()) return onSelect(orch, i);
   if (i.isChatInputCommand()) return onCommand(orch, i, voice);
   if (i.isButton()) return onButton(orch, i);
   if (i.isModalSubmit()) return onModal(orch, i);
@@ -199,25 +233,9 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
         return;
       }
       await i.deferReply();
-      let thread;
-      try {
-        thread = await ch.threads.create({ name: threadName(brief), autoArchiveDuration: ThreadAutoArchiveDuration.OneDay, reason: "Arbiter design session" });
-      } catch (e) {
-        await i.editReply(`I couldn't open a thread here. ${explainDiscordError(e)}`);
-        return;
-      }
       const images = sketch ? await collectImages([sketch], "sketch attached with the brief") : [];
-      await orch.startProject({
-        threadId: thread.id,
-        channelId: ch.id,
-        guildId: i.guildId ?? undefined,
-        brief,
-        referenceUrl: reference,
-        createdBy: { id: i.user.id, name, role: inferRole(i.member) },
-        images,
-        brand,
-      });
-      await i.editReply(`Started ${thread.toString()} — **${brief}**${sketch ? " (with sketch)" : ""}${reference ? ` · reference ${reference}` : ""}`);
+      const r = await openDesignSession(orch, ch, { brief, reference, brand, images, user: { id: i.user.id, name, role: inferRole(i.member) }, guildId: i.guildId ?? undefined });
+      await i.editReply(r.ok ? `Started ${r.thread.toString()} — **${brief}**${sketch ? " (with sketch)" : ""}${reference ? ` · reference ${reference}` : ""}` : r.reason);
       return;
     }
     case "role": {
@@ -256,7 +274,7 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
       return;
     }
     case "help": {
-      await i.reply({ embeds: [welcomeEmbed(orch.productInfo())], flags: MessageFlags.Ephemeral });
+      await i.reply({ embeds: [welcomeEmbed(orch.productInfo())], components: onboardingRows(botOpts.siteUrl), flags: MessageFlags.Ephemeral });
       return;
     }
     case "plan": {
@@ -374,6 +392,10 @@ async function onCommand(orch: Orchestrator, i: ChatInputCommandInteraction, voi
 }
 
 async function onButton(orch: Orchestrator, i: ButtonInteraction): Promise<void> {
+  if (i.customId === "onboard_start") {
+    await i.showModal(startModal());
+    return;
+  }
   const name = displayName(i);
   const projectId = i.channel?.isThread() ? i.channel.id : undefined;
   if (!projectId || !orch.has(projectId)) {
@@ -429,8 +451,32 @@ async function onButton(orch: Orchestrator, i: ButtonInteraction): Promise<void>
   await i.reply({ content: "Unknown button.", flags: MessageFlags.Ephemeral });
 }
 
+async function onSelect(orch: Orchestrator, i: StringSelectMenuInteraction): Promise<void> {
+  if (i.customId !== "role_pick") return;
+  const role = i.values[0] as Role;
+  const projectId = i.channel?.isThread() && orch.has(i.channel.id) ? i.channel.id : undefined;
+  await orch.setRole(i.guildId ?? undefined, projectId, i.user.id, displayName(i), role);
+  const label: Record<string, string> = { designer: "designer", pm: "product / PM", eng: "engineer", stakeholder: "stakeholder" };
+  await i.reply({ content: `Got it, you're the **${label[role] ?? role}**${projectId ? " on this session" : " on this server"}. I'll route the right questions to you.`, flags: MessageFlags.Ephemeral });
+}
+
 async function onModal(orch: Orchestrator, i: ModalSubmitInteraction): Promise<void> {
   const name = displayName(i);
+  if (i.customId === "start_modal") {
+    const brief = i.fields.getTextInputValue("brief").trim();
+    const reference = i.fields.getTextInputValue("reference").trim() || undefined;
+    // From a thread (e.g. /help inside a session), open the new session in the parent channel.
+    const here = i.channel;
+    const ch = here?.type === ChannelType.GuildText ? here : here?.isThread() && here.parent?.type === ChannelType.GuildText ? here.parent : undefined;
+    if (!ch) {
+      await i.reply({ content: "I can only start sessions in a regular text channel. Try the button there, or `/design`.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await i.deferReply();
+    const r = await openDesignSession(orch, ch, { brief, reference, user: { id: i.user.id, name, role: inferRole(i.member) }, guildId: i.guildId ?? undefined });
+    await i.editReply(r.ok ? `✨ **${name}** started ${r.thread.toString()} — ${brief.slice(0, 180)}${reference ? ` · feel of ${reference}` : ""}` : r.reason);
+    return;
+  }
   const projectId = i.channel?.isThread() ? i.channel.id : undefined;
   if (!projectId || !orch.has(projectId)) {
     await i.reply({ content: "This session is no longer tracked.", flags: MessageFlags.Ephemeral });

@@ -131,6 +131,8 @@ export interface GuildSettings {
   stripeEvents?: string[];
   /** set once the welcome message has been posted */
   welcomedAt?: string;
+  /** design sessions started on this server (drives first-session tips) */
+  sessionsStarted?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -190,6 +192,8 @@ export interface TurnResult {
   publishedVersionIds: string[];
   forkOpened?: string;
   error?: string;
+  /** a tool was refused because the server is out of renders */
+  outOfRenders?: boolean;
 }
 
 export function nowIso(): string {

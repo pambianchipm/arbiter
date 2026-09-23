@@ -15,6 +15,12 @@ export class ConsoleSurface implements Surface {
   async postText(_p: Project, text: string): Promise<void> {
     this.say(text);
   }
+  async postKickoff(_p: Project, text: string, opts: { roleMenu: boolean; tips?: string[] }): Promise<void> {
+    this.say(`${text}${opts.tips?.length ? "\n" + opts.tips.map((t) => `   · ${t}`).join("\n") : ""}${opts.roleMenu ? "\n   [role picker: designer · pm · eng · stakeholder]" : ""}`);
+  }
+  async postUpgradePrompt(_p: Project, text: string, url?: string): Promise<void> {
+    this.say(`${text}${url ? `\n   [Upgrade → ${url}]` : ""}`);
+  }
   async postVersion(p: Project, v: Version, png: Buffer): Promise<{ messageId?: string }> {
     this.say(`📐 ${v.id} — ${v.summary}\n   changes: ${v.changes.join("; ") || "—"}\n   for: ${v.addresses.join(", ") || "—"}\n   ${v.previewUrl}  (png ${png.length} bytes → data/projects/${p.id}/${v.id}.png)`);
     return { messageId: `m_${v.id}` };

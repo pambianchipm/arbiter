@@ -81,9 +81,12 @@ when a failure is only visible in the terminal, surface it where he is looking.
 
 The product layer and billing are built: metering, packs, BYOK, Stripe checkout/portal/webhook, landing
 page, welcome message, retention, Dockerfile and railway.json. Phin is deploying to Railway and setting
-up Stripe from `docs/GO-LIVE.md`. The next agreed piece of work is an onboarding UI/UX pass: one-click
-"start a session" from the welcome message, a better landing page (ideally designed in Arbiter itself
-and dropped in as `web/landing.html`), and first-session hints.
+up Stripe from `docs/GO-LIVE.md`. The onboarding pass shipped the same day: a Start button + form on the
+welcome message and `/help`, a role picker, first-session tips, and an upgrade button when a server runs
+out of renders. Phin's first Railway deploys crash-looped (logs not seen); the fix makes configuration
+problems impossible to crash on and shows them on a setup page at the domain. Still to do: confirm the
+Railway deploy is up, run the Stripe test purchase, and optionally design the landing page in Arbiter
+(docs/GO-LIVE.md section 4).
 
 ## Next actions, in order
 

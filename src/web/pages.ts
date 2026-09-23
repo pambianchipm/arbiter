@@ -157,3 +157,22 @@ ${v.canceled ? `<p class="notice">Checkout was canceled. Nothing was charged.</p
 export function messagePage(info: SiteInfo, title: string, body: string): string {
   return shell(`${title} · Arbiter`, `<div class="wrap">${nav(info)}<div class="center"><h1 style="font-size:40px">${esc(title)}</h1><p class="lede">${body}</p></div>${footer(info)}</div>`);
 }
+
+export function setupPage(checks: { level: "fatal" | "warn" | "ok"; title: string; fix?: string }[], state: { discord: string }): string {
+  const icon = { fatal: "⛔", warn: "⚠️", ok: "✅" } as const;
+  const order = { fatal: 0, warn: 1, ok: 2 } as const;
+  const rows = [...checks]
+    .sort((a, b) => order[a.level] - order[b.level])
+    .map((c) => `<div class="card" style="margin-bottom:10px;${c.level === "fatal" ? "border-color:#ef4444" : c.level === "warn" ? "border-color:#f59e0b" : ""}"><b>${icon[c.level]} ${esc(c.title)}</b>${c.fix ? `<p style="margin:6px 0 0;color:var(--dim)">${esc(c.fix)}</p>` : ""}</div>`)
+    .join("");
+  const fatal = checks.some((c) => c.level === "fatal");
+  return shell(
+    "Arbiter setup",
+    `<div class="wrap"><div class="center" style="max-width:760px">
+<h1 style="font-size:36px">${fatal ? "Arbiter isn't running yet" : "Arbiter status"}</h1>
+<p class="lede">${fatal ? "The server is up, but the bot is offline until the items marked ⛔ are fixed. Change the variables in your host's dashboard; it redeploys and this page updates." : "The bot is running. Items marked ⚠️ are worth fixing."} Discord: <b>${esc(state.discord)}</b>.</p>
+<div style="margin-top:24px">${rows}</div>
+<p class="fine">No secret values are shown on this page. Full runbook: docs/GO-LIVE.md in the repo.</p>
+</div></div>`,
+  );
+}
